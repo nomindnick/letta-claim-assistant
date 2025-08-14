@@ -81,20 +81,111 @@ class OllamaEmbeddings(BaseEmbeddingProvider):
         Returns:
             List of embedding vectors
         """
-        # TODO: Implement Ollama embeddings
-        raise NotImplementedError("Ollama embeddings not yet implemented")
+        if not texts:
+            return []
+        
+        embeddings = []
+        
+        # Process in batches to avoid overwhelming the API
+        batch_size = 100
+        
+        async with aiohttp.ClientSession() as session:
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                batch_embeddings = []
+                
+                for text in batch:
+                    try:
+                        payload = {
+                            "model": self.model_name,
+                            "input": text
+                        }
+                        
+                        async with session.post(
+                            self.embed_url,
+                            json=payload,
+                            timeout=aiohttp.ClientTimeout(total=30)
+                        ) as response:
+                            if response.status != 200:
+                                error_text = await response.text()
+                                logger.error(
+                                    "Ollama embedding request failed",
+                                    status=response.status,
+                                    error=error_text,
+                                    model=self.model_name
+                                )
+                                # Return zero vector as fallback
+                                batch_embeddings.append([0.0] * 768)  # Common embedding size
+                                continue
+                            
+                            data = await response.json()
+                            if "embedding" in data and data["embedding"]:
+                                batch_embeddings.append(data["embedding"])
+                            else:
+                                logger.warning("Empty embeddings response", text_preview=text[:100])
+                                batch_embeddings.append([0.0] * 768)
+                                
+                    except asyncio.TimeoutError:
+                        logger.error("Ollama embedding timeout", text_preview=text[:100])
+                        batch_embeddings.append([0.0] * 768)
+                    except Exception as e:
+                        logger.error("Ollama embedding error", error=str(e), text_preview=text[:100])
+                        batch_embeddings.append([0.0] * 768)
+                
+                embeddings.extend(batch_embeddings)
+                
+                # Small delay between batches to avoid rate limiting
+                if i + batch_size < len(texts):
+                    await asyncio.sleep(0.1)
+        
+        logger.debug("Generated embeddings", count=len(embeddings), model=self.model_name)
+        return embeddings
     
     async def test_connection(self) -> bool:
         """Test connection to Ollama embeddings."""
         try:
             async with aiohttp.ClientSession() as session:
+                # First check if Ollama server is running
                 async with session.get(f"{self.base_url}/api/tags", timeout=5) as response:
+                    if response.status != 200:
+                        return False
+                    
+                    data = await response.json()
+                    # Check if our embedding model is available (handle version tags)
+                    models = [model["name"] for model in data.get("models", [])]
+                    model_found = self.model_name in models or f"{self.model_name}:latest" in models
+                    
+                    if not model_found:
+                        logger.warning(
+                            "Embedding model not found in Ollama",
+                            model=self.model_name,
+                            available=models
+                        )
+                        return False
+                
+                # Test actual embedding generation with a simple text
+                test_payload = {
+                    "model": self.model_name,
+                    "input": "test embedding"
+                }
+                
+                async with session.post(
+                    self.embed_url,
+                    json=test_payload,
+                    timeout=10
+                ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        # Check if our embedding model is available
-                        models = [model["name"] for model in data.get("models", [])]
-                        return self.model_name in models
-                    return False
+                        return "embedding" in data and data["embedding"]
+                    else:
+                        error_text = await response.text()
+                        logger.error(
+                            "Ollama embedding test failed",
+                            status=response.status,
+                            error=error_text
+                        )
+                        return False
+                        
         except Exception as e:
             logger.error("Ollama embeddings connection test failed", error=str(e))
             return False
