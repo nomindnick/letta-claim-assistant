@@ -82,6 +82,18 @@ class MatterManager:
         config_dict = matter.to_config_dict()
         settings.save_matter_config(matter_root, config_dict)
         
+        # Initialize Letta agent for the new matter
+        try:
+            from .letta_adapter import LettaAdapter
+            letta_adapter = LettaAdapter(
+                matter_path=matter_root,
+                matter_name=matter.name,
+                matter_id=matter.id
+            )
+            logger.info("Letta agent initialized for new matter", matter_id=matter.id)
+        except Exception as e:
+            logger.warning("Failed to initialize Letta agent for new matter", error=str(e))
+        
         logger.info(
             "Matter created successfully",
             matter_id=matter.id,

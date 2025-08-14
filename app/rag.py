@@ -71,8 +71,17 @@ class RAGEngine:
         else:
             self.llm_provider = llm_provider
         
-        # TODO: Initialize Letta adapter when Sprint 5 is implemented
-        self.letta_adapter = None
+        # Initialize Letta adapter for agent memory
+        from .letta_adapter import LettaAdapter
+        try:
+            self.letta_adapter = LettaAdapter(
+                matter_path=matter.paths.root,
+                matter_name=matter.name,
+                matter_id=matter.id
+            )
+        except Exception as e:
+            logger.warning("Failed to initialize Letta adapter", error=str(e))
+            self.letta_adapter = None
         
         logger.info(
             "RAG engine initialized",
@@ -125,11 +134,15 @@ class RAGEngine:
                 avg_similarity=sum(r.similarity_score for r in search_results) / len(search_results) if search_results else 0
             )
             
-            # Step 2: Memory recall (placeholder for Sprint 5)
+            # Step 2: Memory recall from Letta agent
             memory_items = []
             if self.letta_adapter:
-                # TODO: Implement when Letta adapter is ready
-                memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
+                try:
+                    memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
+                    logger.debug("Agent memory recall completed", memory_items=len(memory_items))
+                except Exception as e:
+                    logger.warning("Agent memory recall failed", error=str(e))
+                    memory_items = []
             
             # Step 3: Assemble prompt
             logger.debug("Assembling RAG prompt")
@@ -176,11 +189,15 @@ class RAGEngine:
             # Step 8: Extract knowledge items for future Letta integration
             extracted_facts = await self._extract_knowledge_items(answer, search_results)
             
-            # TODO: Step 9: Update Letta memory (Sprint 5)
+            # Step 9: Update Letta memory with interaction and extracted facts
             if self.letta_adapter:
-                await self.letta_adapter.upsert_interaction(
-                    query, answer, sources, extracted_facts
-                )
+                try:
+                    await self.letta_adapter.upsert_interaction(
+                        query, answer, sources, extracted_facts
+                    )
+                    logger.debug("Agent memory updated successfully")
+                except Exception as e:
+                    logger.warning("Failed to update agent memory", error=str(e))
             
             response = RAGResponse(
                 answer=answer,
@@ -231,6 +248,16 @@ class RAGEngine:
         memory_items: List[KnowledgeItem]
     ) -> List[str]:
         """Generate contextually relevant follow-up questions."""
+        # Try to use Letta for follow-up generation first
+        if self.letta_adapter:
+            try:
+                followups = await self.letta_adapter.suggest_followups(query, answer)
+                if followups:
+                    return followups
+            except Exception as e:
+                logger.warning("Letta follow-up generation failed, using fallback", error=str(e))
+        
+        # Fallback to direct LLM generation
         try:
             # Build context for follow-up generation
             context_parts = [f"Original Question: {query}", f"Assistant Answer: {answer[:1000]}..."]
