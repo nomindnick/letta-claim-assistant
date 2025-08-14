@@ -288,6 +288,94 @@ class MatterManager:
             if matter.id == matter_id:
                 return matter
         return None
+    
+    def get_matter_documents(self, matter: Matter) -> List[Dict[str, Any]]:
+        """
+        Get document information for a matter.
+        
+        Args:
+            matter: Matter to get documents for
+            
+        Returns:
+            List of document info dictionaries
+        """
+        documents = []
+        
+        # Check docs directory for original files
+        if matter.paths.docs.exists():
+            for file_path in matter.paths.docs.iterdir():
+                if file_path.is_file() and file_path.suffix.lower() == '.pdf':
+                    doc_info = self._get_document_info(matter, file_path)
+                    documents.append(doc_info)
+        
+        return sorted(documents, key=lambda x: x['name'])
+    
+    def _get_document_info(self, matter: Matter, doc_path: Path) -> Dict[str, Any]:
+        """
+        Get detailed information about a document.
+        
+        Args:
+            matter: Matter the document belongs to
+            doc_path: Path to the document file
+            
+        Returns:
+            Document information dictionary
+        """
+        import fitz  # PyMuPDF for page counting
+        
+        doc_name = doc_path.name
+        doc_info = {
+            "name": doc_name,
+            "pages": 0,
+            "chunks": 0,
+            "ocr_status": "none",
+            "status": "pending",
+            "error_message": None,
+            "file_size": doc_path.stat().st_size,
+            "created_at": datetime.fromtimestamp(doc_path.stat().st_ctime).isoformat()
+        }
+        
+        try:
+            # Get page count
+            with fitz.open(doc_path) as pdf_doc:
+                doc_info["pages"] = pdf_doc.page_count
+        except Exception as e:
+            logger.warning("Could not read PDF for page count", error=str(e), doc=doc_name)
+            doc_info["error_message"] = f"Could not read PDF: {str(e)}"
+            doc_info["status"] = "failed"
+            return doc_info
+        
+        # Check if OCR version exists
+        ocr_path = matter.paths.docs_ocr / f"{doc_path.stem}.ocr.pdf"
+        if ocr_path.exists():
+            doc_info["ocr_status"] = "full"  # Simplified - would need analysis for partial
+        
+        # Check if parsed version exists
+        parsed_path = matter.paths.parsed / f"{doc_path.stem}.jsonl"
+        if parsed_path.exists():
+            # Count chunks in parsed file
+            try:
+                chunk_count = 0
+                with open(parsed_path, 'r') as f:
+                    for line in f:
+                        if line.strip():
+                            chunk_count += 1
+                doc_info["chunks"] = chunk_count
+                doc_info["status"] = "completed" if chunk_count > 0 else "processing"
+            except Exception as e:
+                logger.warning("Could not count chunks", error=str(e), doc=doc_name)
+        
+        # Check if embeddings exist in vector store
+        try:
+            from .vectors import VectorStore
+            vector_store = VectorStore(matter.paths.vectors / "chroma")
+            # This would require querying the vector store - simplified for now
+            if doc_info["status"] == "completed":
+                doc_info["status"] = "completed"
+        except Exception:
+            pass  # Vector store not available
+        
+        return doc_info
 
 
 # Global matter manager instance

@@ -364,7 +364,27 @@ async def chat(request: ChatRequest):
             temperature=0.2  # Conservative temperature for legal analysis
         )
         
-        # 5. Convert RAG response to API response format
+        # 5. Save interaction to chat history
+        try:
+            from .chat_history import get_chat_history_manager
+            chat_manager = get_chat_history_manager(matter)
+            await chat_manager.save_interaction(
+                user_query=request.query,
+                assistant_response=rag_response.answer,
+                sources=[source.model_dump() for source in rag_response.sources],
+                followups=rag_response.followups,
+                used_memory=[item.model_dump() for item in rag_response.used_memory],
+                query_metadata={
+                    "k": request.k,
+                    "max_tokens": request.max_tokens,
+                    "model": request.model
+                }
+            )
+        except Exception as e:
+            logger.warning("Failed to save chat history", error=str(e))
+            # Don't fail the request if history saving fails
+        
+        # 6. Convert RAG response to API response format
         api_response = ChatResponse(
             answer=rag_response.answer,
             sources=rag_response.sources,
@@ -545,6 +565,96 @@ async def test_provider_connectivity(request: ProviderTestRequest):
     """Test provider connectivity without registering."""
     request.test_only = True
     return await update_model_settings(request)
+
+
+# Document Management Endpoints
+@app.get("/api/matters/{matter_id}/documents")
+async def get_matter_documents(matter_id: str):
+    """Get list of documents for a matter."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get document information
+        documents = matter_manager.get_matter_documents(matter)
+        
+        logger.info("Retrieved documents for matter", matter_id=matter_id, document_count=len(documents))
+        
+        return {"documents": documents}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get matter documents", error=str(e), matter_id=matter_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Chat History Endpoints
+@app.get("/api/matters/{matter_id}/chat/history")
+async def get_chat_history(matter_id: str, limit: Optional[int] = 50):
+    """Get chat history for a matter."""
+    try:
+        from .chat_history import get_chat_history_manager
+        
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get chat history
+        chat_manager = get_chat_history_manager(matter)
+        messages = await chat_manager.load_history(limit=limit)
+        
+        # Convert to API format
+        api_messages = []
+        for message in messages:
+            api_message = {
+                "role": message.role,
+                "content": message.content,
+                "timestamp": message.timestamp.isoformat(),
+                "sources": message.sources,
+                "followups": message.followups,
+                "used_memory": message.used_memory
+            }
+            api_messages.append(api_message)
+        
+        logger.info("Retrieved chat history", matter_id=matter_id, message_count=len(api_messages))
+        
+        return {"messages": api_messages}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get chat history", error=str(e), matter_id=matter_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/matters/{matter_id}/chat/history")
+async def clear_chat_history(matter_id: str):
+    """Clear chat history for a matter."""
+    try:
+        from .chat_history import get_chat_history_manager
+        
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Clear chat history
+        chat_manager = get_chat_history_manager(matter)
+        await chat_manager.clear_history()
+        
+        logger.info("Cleared chat history", matter_id=matter_id)
+        
+        return {"message": "Chat history cleared successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to clear chat history", error=str(e), matter_id=matter_id)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Health check endpoint

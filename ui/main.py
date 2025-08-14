@@ -11,12 +11,17 @@ import asyncio
 from typing import Optional, List, Dict, Any
 import time
 import tempfile
+from datetime import datetime
 
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from ui.api_client import APIClient
+from ui.utils import (
+    open_pdf_at_page, copy_to_clipboard, ChatMessage, 
+    format_citation, format_timestamp, truncate_text
+)
 from app.logging_conf import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -30,6 +35,8 @@ class LettaClaimUI:
         self.current_matter: Optional[Dict[str, Any]] = None
         self.matters_list: List[Dict[str, Any]] = []
         self.upload_jobs: Dict[str, Dict] = {}  # Track upload jobs
+        self.chat_history: List[Dict[str, Any]] = []  # Chat message history
+        self.current_sources: List[Dict[str, Any]] = []  # Current sources for display
         
         # UI component references
         self.matter_selector = None
@@ -64,6 +71,9 @@ class LettaClaimUI:
         
         # Settings drawer
         await self._create_settings_drawer()
+        
+        # Initialize chat display
+        await self._update_chat_display()
         
         # Start background job polling
         ui.timer(2.0, self._poll_job_status)
@@ -155,27 +165,7 @@ class LettaClaimUI:
             # Chat messages area
             with ui.card().classes('w-full flex-1 mb-4'):
                 self.chat_messages = ui.column().classes('w-full h-full overflow-y-auto p-4')
-                
-                # Welcome message
-                if self.current_matter:
-                    welcome_text = f"""
-                    **Active Matter:** {self.current_matter['name']}
-                    
-                    Upload PDF documents and ask questions about your construction claim.
-                    The assistant will provide answers with precise citations.
-                    """
-                else:
-                    welcome_text = """
-                    **Welcome to Letta Construction Claim Assistant!**
-                    
-                    1. Create or select a Matter
-                    2. Upload PDF documents for analysis
-                    3. Ask questions about your construction claim
-                    
-                    The assistant will provide answers with precise citations and suggest follow-up questions.
-                    """
-                    
-                ui.markdown(welcome_text).classes('text-gray-600')
+                # Chat messages will be populated by _update_chat_display()
             
             # Chat input
             with ui.row().classes('w-full'):
@@ -222,36 +212,141 @@ class LettaClaimUI:
                 with ui.card().classes('w-full mb-4'):
                     ui.label('LLM Provider').classes('font-semibold mb-2')
                     
-                    ui.select(
+                    self.provider_select = ui.select(
                         {'ollama': 'Ollama (Local)', 'gemini': 'Gemini (External)'},
                         label='Provider',
-                        value='ollama'
+                        value='ollama',
+                        on_change=self._on_provider_changed
                     ).classes('w-full mb-2')
                     
-                    ui.input(
+                    self.generation_model_input = ui.input(
                         label='Generation Model',
                         value='gpt-oss:20b'
                     ).classes('w-full mb-2')
                     
-                    ui.input(
+                    self.embedding_model_input = ui.input(
                         label='Embedding Model', 
                         value='nomic-embed-text'
                     ).classes('w-full mb-2')
                     
-                    ui.button('Test Connection', icon='wifi').classes('w-full')
+                    # API key input (hidden by default)
+                    self.api_key_input = ui.input(
+                        label='API Key',
+                        password=True,
+                        placeholder='Enter API key for external providers'
+                    ).classes('w-full mb-2 hidden')
+                    
+                    with ui.row().classes('gap-2 w-full'):
+                        ui.button(
+                            'Test Connection',
+                            icon='wifi',
+                            on_click=self._test_provider_connection
+                        ).classes('flex-1')
+                        ui.button(
+                            'Save Settings',
+                            icon='save',
+                            on_click=self._save_provider_settings
+                        ).classes('flex-1').props('color=primary')
                 
                 # OCR settings
                 with ui.card().classes('w-full mb-4'):
                     ui.label('OCR Settings').classes('font-semibold mb-2')
                     
-                    ui.select(
+                    self.ocr_language_select = ui.select(
                         {'eng': 'English', 'spa': 'Spanish', 'fra': 'French'},
                         label='Language',
                         value='eng'
                     ).classes('w-full mb-2')
                     
-                    ui.checkbox('Force OCR on all pages').classes('w-full')
-                    ui.checkbox('Skip text on born-digital PDFs', value=True).classes('w-full')
+                    self.force_ocr_checkbox = ui.checkbox('Force OCR on all pages').classes('w-full')
+                    self.skip_text_checkbox = ui.checkbox('Skip text on born-digital PDFs', value=True).classes('w-full')
+        
+        # Load current settings
+        await self._load_current_settings()
+    
+    async def _load_current_settings(self):
+        """Load current settings from backend."""
+        try:
+            settings = await self.api_client.get_model_settings()
+            
+            # Update provider settings
+            active_provider = settings.get('active_provider', 'ollama')
+            self.provider_select.value = active_provider
+            
+            # Show/hide API key field based on provider
+            await self._on_provider_changed({'value': active_provider})
+            
+            logger.info("Loaded current settings", active_provider=active_provider)
+            
+        except Exception as e:
+            logger.error("Failed to load settings", error=str(e))
+            ui.notify("Failed to load settings", type="negative")
+    
+    async def _on_provider_changed(self, e):
+        """Handle provider selection change."""
+        provider = e.get('value', 'ollama')
+        
+        if provider == 'gemini':
+            self.api_key_input.classes(remove='hidden')
+            self.generation_model_input.value = 'gemini-2.0-flash-exp'
+            self.embedding_model_input.props('disable')  # Gemini doesn't do embeddings
+        else:
+            self.api_key_input.classes(add='hidden')
+            self.generation_model_input.value = 'gpt-oss:20b'
+            self.embedding_model_input.props(remove='disable')
+            self.embedding_model_input.value = 'nomic-embed-text'
+    
+    async def _test_provider_connection(self):
+        """Test connection to selected provider."""
+        try:
+            provider = self.provider_select.value
+            generation_model = self.generation_model_input.value
+            embedding_model = self.embedding_model_input.value
+            api_key = self.api_key_input.value if provider == 'gemini' else None
+            
+            # Test via API
+            test_result = await self.api_client.update_model_settings(
+                provider=provider,
+                generation_model=generation_model,
+                embedding_model=embedding_model,
+                api_key=api_key
+            )
+            
+            if test_result.get('success', False):
+                ui.notify(f"✓ {provider.title()} connection successful", type="positive")
+            else:
+                error_msg = test_result.get('error', 'Unknown error')
+                ui.notify(f"✗ Connection failed: {error_msg}", type="negative")
+                
+        except Exception as e:
+            logger.error("Failed to test provider", error=str(e))
+            ui.notify(f"Test failed: {str(e)}", type="negative")
+    
+    async def _save_provider_settings(self):
+        """Save provider settings."""
+        try:
+            provider = self.provider_select.value
+            generation_model = self.generation_model_input.value
+            embedding_model = self.embedding_model_input.value
+            api_key = self.api_key_input.value if provider == 'gemini' else None
+            
+            # Save via API
+            result = await self.api_client.update_model_settings(
+                provider=provider,
+                generation_model=generation_model,
+                embedding_model=embedding_model,
+                api_key=api_key
+            )
+            
+            if result.get('success', False):
+                ui.notify("Settings saved successfully", type="positive")
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                ui.notify(f"Failed to save settings: {error_msg}", type="negative")
+                
+        except Exception as e:
+            logger.error("Failed to save settings", error=str(e))
+            ui.notify(f"Failed to save settings: {str(e)}", type="negative")
     
     async def _refresh_document_list(self):
         """Refresh the document list display."""
@@ -262,27 +357,169 @@ class LettaClaimUI:
                 ui.label('Select a Matter to see documents').classes('text-gray-500 text-center py-4')
             return
         
-        # Show upload jobs in progress
-        for job_id, job_info in self.upload_jobs.items():
-            if job_info['matter_id'] == self.current_matter['id']:
+        try:
+            # Get actual documents from backend
+            documents = await self.api_client.get_matter_documents(self.current_matter['id'])
+            
+            # Show upload jobs in progress first
+            active_jobs = 0
+            for job_id, job_info in self.upload_jobs.items():
+                if job_info['matter_id'] == self.current_matter['id']:
+                    active_jobs += 1
+                    with self.document_list:
+                        await self._create_upload_job_card(job_info)
+            
+            # Show processed documents
+            if documents:
                 with self.document_list:
-                    with ui.card().classes('w-full mb-2 p-2'):
-                        with ui.row().classes('w-full justify-between items-center'):
-                            ui.label(job_info['filename']).classes('font-medium')
-                            if job_info['status'] == 'running':
-                                ui.spinner()
-                        
-                        ui.linear_progress(
-                            value=job_info.get('progress', 0),
-                            show_value=True
-                        ).classes('w-full mt-1')
-                        
-                        ui.label(job_info.get('message', 'Processing...')).classes('text-xs text-gray-600')
+                    for doc in documents:
+                        await self._create_document_card(doc)
+            elif active_jobs == 0:
+                with self.document_list:
+                    ui.label('No documents uploaded yet').classes('text-gray-500 text-center py-4')
+                    ui.label('Upload PDF files to begin analysis').classes('text-xs text-gray-400 text-center')
         
-        # Show processed documents (placeholder for now)
-        if not self.upload_jobs:
+        except Exception as e:
+            logger.error("Failed to refresh document list", error=str(e))
             with self.document_list:
-                ui.label('No documents uploaded yet').classes('text-gray-500 text-center py-4')
+                ui.label('Error loading documents').classes('text-red-500 text-center py-4')
+    
+    async def _create_upload_job_card(self, job_info: Dict[str, Any]):
+        """Create a card for an upload job in progress."""
+        with ui.card().classes('w-full mb-2 p-2 border-l-4 border-blue-500'):
+            with ui.row().classes('w-full justify-between items-center'):
+                ui.label(job_info['filename']).classes('font-medium text-sm')
+                if job_info['status'] == 'running':
+                    ui.spinner().classes('text-blue-500')
+                elif job_info['status'] == 'completed':
+                    ui.icon('check_circle').classes('text-green-500')
+                elif job_info['status'] == 'failed':
+                    ui.icon('error').classes('text-red-500')
+            
+            if job_info['status'] in ['queued', 'running']:
+                ui.linear_progress(
+                    value=job_info.get('progress', 0),
+                    show_value=True
+                ).classes('w-full mt-1')
+            
+            status_message = job_info.get('message', 'Processing...')
+            ui.label(status_message).classes('text-xs text-gray-600')
+    
+    async def _create_document_card(self, doc: Dict[str, Any]):
+        """Create a card for a processed document."""
+        doc_name = doc.get('name', 'Unknown Document')
+        pages = doc.get('pages', 0)
+        chunks = doc.get('chunks', 0)
+        ocr_status = doc.get('ocr_status', 'none')
+        status = doc.get('status', 'pending')
+        error_message = doc.get('error_message')
+        file_size = doc.get('file_size', 0)
+        
+        # Status color mapping
+        status_colors = {
+            'completed': 'border-green-500',
+            'processing': 'border-yellow-500',
+            'failed': 'border-red-500',
+            'pending': 'border-gray-500'
+        }
+        
+        border_class = status_colors.get(status, 'border-gray-500')
+        
+        with ui.card().classes(f'w-full mb-2 p-3 border-l-4 {border_class}'):
+            # Header with document name and status
+            with ui.row().classes('w-full justify-between items-start mb-2'):
+                with ui.column().classes('flex-1'):
+                    ui.label(doc_name).classes('font-medium text-sm')
+                    
+                    # Document stats
+                    stats = []
+                    if pages > 0:
+                        stats.append(f"{pages} pages")
+                    if chunks > 0:
+                        stats.append(f"{chunks} chunks")
+                    if file_size > 0:
+                        size_mb = file_size / (1024 * 1024)
+                        stats.append(f"{size_mb:.1f}MB")
+                    
+                    if stats:
+                        ui.label(" • ".join(stats)).classes('text-xs text-gray-600')
+                
+                # Status indicators
+                with ui.column().classes('items-end'):
+                    # Processing status
+                    if status == 'completed':
+                        ui.icon('check_circle').classes('text-green-500')
+                    elif status == 'processing':
+                        ui.spinner().classes('text-yellow-500')
+                    elif status == 'failed':
+                        ui.icon('error').classes('text-red-500')
+                    else:
+                        ui.icon('pending').classes('text-gray-500')
+                    
+                    # OCR status
+                    if ocr_status == 'full':
+                        ui.label('OCR: Full').classes('text-xs bg-green-100 text-green-800 px-1 rounded')
+                    elif ocr_status == 'partial':
+                        ui.label('OCR: Partial').classes('text-xs bg-yellow-100 text-yellow-800 px-1 rounded')
+                    else:
+                        ui.label('OCR: None').classes('text-xs bg-gray-100 text-gray-800 px-1 rounded')
+            
+            # Error message if failed
+            if error_message:
+                ui.label(f"Error: {error_message}").classes('text-xs text-red-600 bg-red-50 p-1 rounded')
+            
+            # Action buttons for completed documents
+            if status == 'completed':
+                with ui.row().classes('gap-1 mt-2'):
+                    ui.button(
+                        'Open PDF',
+                        icon='picture_as_pdf',
+                        on_click=lambda d=doc: self._open_document_pdf(d)
+                    ).props('size=sm outline')
+                    
+                    if chunks > 0:
+                        ui.button(
+                            'View Chunks',
+                            icon='view_list',
+                            on_click=lambda d=doc: self._show_document_chunks(d)
+                        ).props('size=sm outline')
+            
+            elif status == 'failed':
+                with ui.row().classes('gap-1 mt-2'):
+                    ui.button(
+                        'Retry Processing',
+                        icon='refresh',
+                        on_click=lambda d=doc: self._retry_document_processing(d)
+                    ).props('size=sm color=warning')
+    
+    async def _open_document_pdf(self, doc: Dict[str, Any]):
+        """Open the document PDF."""
+        if not self.current_matter:
+            ui.notify("No active matter", type="negative")
+            return
+        
+        doc_name = doc.get('name', '')
+        if not doc_name:
+            ui.notify("Document name not available", type="negative")
+            return
+        
+        # Construct path to document
+        matter_root = Path.home() / "LettaClaims" / f"Matter_{self.current_matter.get('slug', '')}"
+        doc_path = matter_root / "docs" / doc_name
+        
+        success = await open_pdf_at_page(doc_path, 1)
+        if not success:
+            ui.notify(f"Could not open {doc_name}", type="negative")
+    
+    async def _show_document_chunks(self, doc: Dict[str, Any]):
+        """Show document chunks in a dialog."""
+        ui.notify("Chunk viewer not yet implemented", type="info")
+        # TODO: Implement chunk viewer dialog
+    
+    async def _retry_document_processing(self, doc: Dict[str, Any]):
+        """Retry processing a failed document."""
+        ui.notify("Document retry not yet implemented", type="info")
+        # TODO: Implement document retry functionality
     
     # Event handlers
     async def _on_matter_changed(self, e):
@@ -307,7 +544,7 @@ class LettaClaimUI:
             
             # Refresh UI
             await self._refresh_document_list()
-            await self._update_chat_welcome()
+            await self._load_chat_history()
             
             ui.notify(f"Switched to Matter: {self.current_matter['name']}", type="positive")
             
@@ -438,10 +675,20 @@ class LettaClaimUI:
         self.chat_input.value = ''
         self.send_button.props('disable')
         
-        # Add user message to chat
+        # Add user message to chat history and display
+        user_message = {
+            "role": "user",
+            "content": query,
+            "timestamp": datetime.now().isoformat(),
+            "sources": [],
+            "followups": [],
+            "used_memory": []
+        }
+        self.chat_history.append(user_message)
+        
+        # Add user message to display
         with self.chat_messages:
-            with ui.card().classes('w-full mb-2 bg-blue-50'):
-                ui.markdown(f"**You:** {query}")
+            await self._add_message_to_display(user_message)
         
         # Show thinking indicator
         with self.chat_messages:
@@ -461,20 +708,23 @@ class LettaClaimUI:
             # Remove thinking indicator
             thinking_card.delete()
             
-            # Add assistant response
+            # Add assistant message to chat history
+            assistant_message = {
+                "role": "assistant",
+                "content": response['answer'],
+                "timestamp": datetime.now().isoformat(),
+                "sources": response.get('sources', []),
+                "followups": response.get('followups', []),
+                "used_memory": response.get('used_memory', [])
+            }
+            self.chat_history.append(assistant_message)
+            
+            # Add assistant response to display
             with self.chat_messages:
-                with ui.card().classes('w-full mb-2 bg-green-50'):
-                    ui.markdown(f"**Assistant:**\n\n{response['answer']}")
-                    
-                    # Add follow-up suggestions
-                    if response.get('followups'):
-                        ui.label('Suggested follow-ups:').classes('font-semibold mt-2 mb-1')
-                        with ui.row().classes('gap-1'):
-                            for suggestion in response['followups'][:3]:  # Limit to 3
-                                ui.button(
-                                    suggestion,
-                                    on_click=lambda s=suggestion: self._use_suggestion(s)
-                                ).props('size=sm outline')
+                await self._add_message_to_display(assistant_message)
+            
+            # Auto-scroll to bottom of chat
+            await self._scroll_chat_to_bottom()
             
             # Update sources panel
             await self._update_sources_panel(response.get('sources', []))
@@ -491,6 +741,7 @@ class LettaClaimUI:
     
     async def _update_sources_panel(self, sources: List[Dict[str, Any]]):
         """Update the sources panel with new sources."""
+        self.current_sources = sources
         self.sources_panel.clear()
         
         if not sources:
@@ -500,25 +751,194 @@ class LettaClaimUI:
         
         with self.sources_panel:
             for i, source in enumerate(sources):
-                with ui.card().classes('w-full mb-2 p-2'):
-                    # Header with document and page info
-                    with ui.row().classes('w-full justify-between items-center mb-2'):
-                        ui.label(f"{source['doc']} p.{source['page_start']}").classes('font-medium')
-                        ui.label(f"sim={source['score']:.2f}").classes('text-xs bg-gray-200 px-1 rounded')
-                    
-                    # Source text snippet
-                    ui.label(source['text'][:200] + '...' if len(source['text']) > 200 else source['text']).classes('text-sm text-gray-700 mb-2')
-                    
-                    # Action buttons
-                    with ui.row().classes('gap-1'):
-                        ui.button('Open PDF', icon='open_in_new').props('size=sm')
-                        ui.button('Copy Citation', icon='copy').props('size=sm outline')
+                await self._create_source_card(source, i)
     
-    async def _update_chat_welcome(self):
-        """Update the chat welcome message."""
-        # This would clear and recreate the welcome message
-        # For now, we'll handle this in the matter change event
-        pass
+    async def _create_source_card(self, source: Dict[str, Any], index: int):
+        """Create a source card with functional buttons."""
+        doc_name = source.get('doc', 'Unknown Document')
+        page_start = source.get('page_start', 1)
+        page_end = source.get('page_end', page_start)
+        text = source.get('text', '')
+        score = source.get('score', 0.0)
+        
+        with ui.card().classes('w-full mb-2 p-2'):
+            # Header with document and page info
+            with ui.row().classes('w-full justify-between items-center mb-2'):
+                doc_label = f"{doc_name} p.{page_start}"
+                if page_end != page_start:
+                    doc_label = f"{doc_name} p.{page_start}-{page_end}"
+                ui.label(doc_label).classes('font-medium text-sm')
+                ui.label(f"sim={score:.2f}").classes('text-xs bg-gray-200 px-1 rounded')
+            
+            # Source text snippet
+            display_text = truncate_text(text, 200)
+            ui.label(display_text).classes('text-sm text-gray-700 mb-2')
+            
+            # Action buttons
+            with ui.row().classes('gap-1'):
+                ui.button(
+                    'Open PDF',
+                    icon='open_in_new',
+                    on_click=lambda s=source: self._open_source_pdf(s)
+                ).props('size=sm')
+                ui.button(
+                    'Copy Citation',
+                    icon='copy',
+                    on_click=lambda s=source: self._copy_source_citation(s)
+                ).props('size=sm outline')
+    
+    async def _open_source_pdf(self, source: Dict[str, Any]):
+        """Open PDF document at the source page."""
+        if not self.current_matter:
+            ui.notify("No active matter", type="negative")
+            return
+        
+        doc_name = source.get('doc', '')
+        page_start = source.get('page_start', 1)
+        
+        if not doc_name:
+            ui.notify("Document name not available", type="negative")
+            return
+        
+        # Construct path to document
+        from pathlib import Path
+        doc_path = Path(self.current_matter.get('docs_path', '')) / doc_name
+        if not doc_path.exists():
+            # Try in docs directory based on matter structure
+            matter_root = Path.home() / "LettaClaims" / f"Matter_{self.current_matter.get('slug', '')}"
+            doc_path = matter_root / "docs" / doc_name
+        
+        # Open PDF at page
+        success = await open_pdf_at_page(doc_path, page_start)
+        if not success:
+            ui.notify(f"Could not open {doc_name}", type="negative")
+    
+    async def _copy_source_citation(self, source: Dict[str, Any]):
+        """Copy source citation to clipboard."""
+        doc_name = source.get('doc', 'Unknown Document')
+        page_start = source.get('page_start', 1)
+        page_end = source.get('page_end', page_start)
+        
+        citation = format_citation(doc_name, page_start, page_end)
+        success = await copy_to_clipboard(citation)
+        
+        if success:
+            ui.notify(f"Copied: {citation}", type="positive")
+    
+    async def _load_chat_history(self):
+        """Load and display chat history for current matter."""
+        if not self.current_matter:
+            self.chat_history = []
+            await self._update_chat_display()
+            return
+        
+        try:
+            # Load chat history from API
+            messages = await self.api_client.get_chat_history(
+                self.current_matter['id'],
+                limit=50
+            )
+            self.chat_history = messages
+            await self._update_chat_display()
+            
+            logger.info("Loaded chat history", message_count=len(messages))
+            
+        except Exception as e:
+            logger.error("Failed to load chat history", error=str(e))
+            self.chat_history = []
+            await self._update_chat_display()
+    
+    async def _update_chat_display(self):
+        """Update the chat messages display."""
+        if not self.chat_messages:
+            return
+        
+        # Clear current messages
+        self.chat_messages.clear()
+        
+        with self.chat_messages:
+            if not self.chat_history:
+                # Show welcome message
+                if self.current_matter:
+                    welcome_text = f"""
+                    **Active Matter:** {self.current_matter['name']}
+                    
+                    Upload PDF documents and ask questions about your construction claim.
+                    The assistant will provide answers with precise citations.
+                    """
+                else:
+                    welcome_text = """
+                    **Welcome to Letta Construction Claim Assistant!**
+                    
+                    1. Create or select a Matter
+                    2. Upload PDF documents for analysis
+                    3. Ask questions about your construction claim
+                    
+                    The assistant will provide answers with precise citations and suggest follow-up questions.
+                    """
+                    
+                ui.markdown(welcome_text).classes('text-gray-600 p-4')
+            else:
+                # Display chat history
+                for message in self.chat_history:
+                    await self._add_message_to_display(message)
+    
+    async def _add_message_to_display(self, message: Dict[str, Any]):
+        """Add a single message to the chat display."""
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        timestamp = message.get("timestamp", "")
+        sources = message.get("sources", [])
+        followups = message.get("followups", [])
+        
+        # Format timestamp
+        from datetime import datetime
+        try:
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            time_str = format_timestamp(dt)
+        except:
+            time_str = ""
+        
+        if role == "user":
+            # User message
+            with ui.card().classes('w-full mb-2 bg-blue-50'):
+                with ui.row().classes('w-full justify-between items-start'):
+                    ui.markdown(f"**You:** {content}")
+                    if time_str:
+                        ui.label(time_str).classes('text-xs text-gray-500')
+        
+        elif role == "assistant":
+            # Assistant message
+            with ui.card().classes('w-full mb-2 bg-green-50'):
+                with ui.column().classes('w-full'):
+                    with ui.row().classes('w-full justify-between items-start'):
+                        ui.markdown(f"**Assistant:**\n\n{content}")
+                        if time_str:
+                            ui.label(time_str).classes('text-xs text-gray-500')
+                    
+                    # Add follow-up suggestions if available
+                    if followups:
+                        ui.label('Suggested follow-ups:').classes('font-semibold mt-2 mb-1')
+                        with ui.row().classes('gap-1 flex-wrap'):
+                            for suggestion in followups[:3]:  # Limit to 3
+                                ui.button(
+                                    truncate_text(suggestion, 50),
+                                    on_click=lambda s=suggestion: self._use_suggestion(s)
+                                ).props('size=sm outline')
+            
+            # Update sources display if this is the last assistant message
+            if message == self.chat_history[-1]:
+                await self._update_sources_panel(sources)
+    
+    async def _scroll_chat_to_bottom(self):
+        """Scroll chat messages to the bottom."""
+        # Use JavaScript to scroll to bottom
+        ui.run_javascript('''
+            const chatContainer = document.querySelector('[class*="overflow-y-auto"]');
+            if (chatContainer) {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        ''')
     
     def _toggle_settings_drawer(self):
         """Toggle the settings drawer."""
@@ -531,6 +951,7 @@ class LettaClaimUI:
             return
         
         jobs_to_remove = []
+        jobs_updated = False
         
         for job_key, job_info in self.upload_jobs.items():
             if job_info['status'] in ['completed', 'failed']:
@@ -539,29 +960,51 @@ class LettaClaimUI:
             try:
                 status = await self.api_client.get_job_status(job_info['job_id'])
                 
+                # Check if status actually changed
+                old_status = job_info['status']
+                old_progress = job_info.get('progress', 0.0)
+                
                 # Update job info
                 job_info['status'] = status['status']
                 job_info['progress'] = status.get('progress', 0.0)
                 job_info['message'] = status.get('message', 'Processing...')
                 
+                # Mark as updated if status or progress changed significantly
+                if (old_status != job_info['status'] or 
+                    abs(old_progress - job_info['progress']) > 0.05):
+                    jobs_updated = True
+                
                 if status['status'] in ['completed', 'failed']:
                     jobs_to_remove.append(job_key)
                     
                     if status['status'] == 'completed':
-                        ui.notify(f"Document processed: {job_info['filename']}", type="positive")
+                        ui.notify(f"✓ Document processed: {job_info['filename']}", type="positive")
                     else:
-                        ui.notify(f"Processing failed: {job_info['filename']}", type="negative")
+                        error_detail = status.get('error', 'Unknown error')
+                        ui.notify(f"✗ Processing failed: {job_info['filename']} - {error_detail}", type="negative")
                 
             except Exception as e:
                 logger.error("Failed to get job status", job_id=job_info['job_id'], error=str(e))
+                # Mark job as failed if we can't get status
+                job_info['status'] = 'failed'
+                job_info['message'] = 'Status check failed'
+                jobs_updated = True
         
         # Remove completed jobs after a delay
         for job_key in jobs_to_remove:
             del self.upload_jobs[job_key]
         
-        # Refresh document list if any jobs completed
-        if jobs_to_remove:
+        # Refresh document list if any jobs completed or updated significantly
+        if jobs_to_remove or jobs_updated:
             await self._refresh_document_list()
+            
+        # If jobs are still running, show overall progress in browser title
+        if self.upload_jobs:
+            active_count = len([j for j in self.upload_jobs.values() if j['status'] in ['queued', 'running']])
+            if active_count > 0:
+                ui.run_javascript(f'document.title = "Letta Claims ({active_count} processing...)"')
+        else:
+            ui.run_javascript('document.title = "Letta Construction Claim Assistant"')
 
 
 async def create_app():

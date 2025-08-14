@@ -219,6 +219,54 @@ class APIClient:
             logger.error("Failed to update model settings", error=str(e))
             raise
     
+    # Document Management
+    async def get_matter_documents(self, matter_id: str) -> List[Dict[str, Any]]:
+        """Get list of documents for a matter."""
+        session = await self._get_session()
+        try:
+            async with session.get(f"{self.base_url}/api/matters/{matter_id}/documents") as response:
+                response.raise_for_status()
+                result = await response.json()
+                return result.get("documents", [])
+        except Exception as e:
+            logger.error("Failed to get matter documents", error=str(e))
+            raise
+    
+    # Chat History Management
+    async def get_chat_history(
+        self,
+        matter_id: str,
+        limit: Optional[int] = 50
+    ) -> List[Dict[str, Any]]:
+        """Get chat history for a matter."""
+        session = await self._get_session()
+        try:
+            params = {}
+            if limit:
+                params["limit"] = limit
+                
+            async with session.get(
+                f"{self.base_url}/api/matters/{matter_id}/chat/history",
+                params=params
+            ) as response:
+                response.raise_for_status()
+                result = await response.json()
+                return result.get("messages", [])
+        except Exception as e:
+            logger.error("Failed to get chat history", error=str(e))
+            raise
+    
+    async def clear_chat_history(self, matter_id: str) -> bool:
+        """Clear chat history for a matter."""
+        session = await self._get_session()
+        try:
+            async with session.delete(f"{self.base_url}/api/matters/{matter_id}/chat/history") as response:
+                response.raise_for_status()
+                return True
+        except Exception as e:
+            logger.error("Failed to clear chat history", error=str(e))
+            raise
+    
     # Health Check
     async def health_check(self) -> bool:
         """Check if backend API is healthy."""
