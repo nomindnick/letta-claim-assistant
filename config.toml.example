@@ -1,0 +1,32 @@
+# Letta Construction Claim Assistant - Configuration Template
+# Copy this to ~/.letta-claim/config.toml and customize as needed
+
+[ui]
+framework = "nicegui"
+native = true
+
+[llm]
+provider = "ollama"              # "ollama" | "gemini"
+model = "gpt-oss:20b"
+temperature = 0.2
+max_tokens = 900
+
+[embeddings]
+provider = "ollama"
+model = "nomic-embed-text"
+
+[ocr]
+enabled = true
+force_ocr = false
+language = "eng"
+skip_text = true                 # only OCR pages without text
+
+[paths]
+root = "~/LettaClaims"
+
+[gemini]
+api_key = ""                     # Set your Gemini API key here
+model = "gemini-2.5-flash"
+
+[letta]
+enable_filesystem = true
