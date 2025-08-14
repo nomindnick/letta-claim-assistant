@@ -4,7 +4,7 @@ Letta Construction Claim Assistant - Main Entry Point
 
 This is the main entry point for the Letta Construction Claim Assistant
 desktop application. It sets up the environment and launches the NiceGUI
-interface.
+interface with integrated FastAPI backend.
 
 Usage:
     python main.py
@@ -17,13 +17,16 @@ import sys
 import asyncio
 from pathlib import Path
 from typing import Optional
+import threading
+import uvicorn
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from app.settings import settings
 from app.logging_conf import setup_logging, get_logger
-from ui.main import main as ui_main
+from app.api import app as fastapi_app
+from ui.main import create_ui_app
 
 
 def setup_application() -> bool:
@@ -61,6 +64,24 @@ def setup_application() -> bool:
         return False
 
 
+def start_backend_server():
+    """Start the FastAPI backend server in a separate thread."""
+    logger = get_logger(__name__)
+    logger.info("Starting FastAPI backend server")
+    
+    # Configure uvicorn for embedded use
+    config = uvicorn.Config(
+        fastapi_app,
+        host="127.0.0.1",
+        port=8000,
+        log_level="info",
+        access_log=False  # Reduce noise in logs
+    )
+    
+    server = uvicorn.Server(config)
+    server.run()
+
+
 def main():
     """Main application entry point."""
     
@@ -71,9 +92,22 @@ def main():
     logger = get_logger(__name__)
     
     try:
+        # Start FastAPI backend in background thread
+        logger.info("Starting backend server in background")
+        backend_thread = threading.Thread(
+            target=start_backend_server,
+            daemon=True,
+            name="FastAPI-Backend"
+        )
+        backend_thread.start()
+        
+        # Give backend a moment to start
+        import time
+        time.sleep(2)
+        
         # Start the UI
         logger.info("Launching user interface")
-        ui_main()
+        create_ui_app()
         
     except KeyboardInterrupt:
         logger.info("Application interrupted by user")

@@ -9,9 +9,12 @@ from typing import List, Dict, Any, Optional
 import aiohttp
 import asyncio
 import json
+import sys
 from pathlib import Path
 
-from ..app.logging_conf import get_logger
+sys.path.append(str(Path(__file__).parent.parent))
+
+from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -107,15 +110,19 @@ class APIClient:
         
         # Prepare multipart data
         data = aiohttp.FormData()
-        for file_path in files:
-            data.add_field(
-                'files',
-                open(file_path, 'rb'),
-                filename=file_path.name,
-                content_type='application/pdf'
-            )
+        file_handles = []
         
         try:
+            for file_path in files:
+                file_handle = open(file_path, 'rb')
+                file_handles.append(file_handle)
+                data.add_field(
+                    'files',
+                    file_handle,
+                    filename=file_path.name,
+                    content_type='application/pdf'
+                )
+            
             async with session.post(
                 f"{self.base_url}/api/matters/{matter_id}/upload",
                 data=data
@@ -123,15 +130,15 @@ class APIClient:
                 response.raise_for_status()
                 result = await response.json()
                 return result["job_id"]
+                
         except Exception as e:
             logger.error("Failed to upload files", error=str(e))
             raise
         finally:
             # Close file handles
-            for file_path in files:
+            for file_handle in file_handles:
                 try:
-                    # Note: In real implementation, we'd need to track these properly
-                    pass
+                    file_handle.close()
                 except:
                     pass
     

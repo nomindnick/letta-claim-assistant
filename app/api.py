@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
+import time
 
 from .models import (
     CreateMatterRequest, CreateMatterResponse, MatterSummary,
@@ -59,6 +60,13 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on application shutdown."""
     logger.info("Shutting down Letta Claim Assistant API")
+
+
+# Health check endpoint
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "timestamp": time.time()}
 
 
 # Pydantic models are now imported from models.py
