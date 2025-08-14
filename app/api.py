@@ -11,10 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
 
+from .models import (
+    CreateMatterRequest, CreateMatterResponse, MatterSummary,
+    ChatRequest, ChatResponse, JobStatus, DocumentInfo
+)
 from .logging_conf import get_logger
-from .matters import matter_manager, Matter
-from .jobs import job_queue, JobInfo
-from .rag import RAGResponse
+from .matters import matter_manager
+from .jobs import job_queue
 
 logger = get_logger(__name__)
 
@@ -31,33 +34,7 @@ app.add_middleware(
 )
 
 
-# Pydantic models for request/response
-class CreateMatterRequest(BaseModel):
-    name: str
-
-
-class MatterResponse(BaseModel):
-    id: str
-    name: str
-    slug: str
-    created_at: str
-    paths: Dict[str, str]
-
-
-class ChatRequest(BaseModel):
-    matter_id: str
-    query: str
-    k: int = 8
-    model: Optional[str] = None
-    max_tokens: int = 900
-
-
-class ChatResponse(BaseModel):
-    answer: str
-    sources: List[Dict[str, Any]]
-    followups: List[str]
-    used_memory: List[Dict[str, Any]]
-
+# Pydantic models are now imported from models.py
 
 class ModelSettings(BaseModel):
     provider: str
@@ -67,48 +44,39 @@ class ModelSettings(BaseModel):
 
 
 # Matter Management Endpoints
-@app.post("/api/matters", response_model=MatterResponse)
+@app.post("/api/matters", response_model=CreateMatterResponse)
 async def create_matter(request: CreateMatterRequest):
     """Create a new Matter with filesystem structure."""
     try:
         matter = matter_manager.create_matter(request.name)
-        return MatterResponse(
+        return CreateMatterResponse(
             id=matter.id,
-            name=matter.name,
             slug=matter.slug,
-            created_at=matter.created_at.isoformat(),
             paths={
                 "root": str(matter.paths.root),
                 "docs": str(matter.paths.docs),
+                "docs_ocr": str(matter.paths.docs_ocr),
+                "parsed": str(matter.paths.parsed),
                 "vectors": str(matter.paths.vectors),
-                "knowledge": str(matter.paths.knowledge)
+                "knowledge": str(matter.paths.knowledge),
+                "chat": str(matter.paths.chat),
+                "logs": str(matter.paths.logs)
             }
         )
+    except ValueError as e:
+        logger.error("Invalid matter creation request", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Failed to create matter", error=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/matters")
+@app.get("/api/matters", response_model=List[MatterSummary])
 async def list_matters():
-    """List all available Matters."""
+    """List all available Matters with summary information."""
     try:
-        matters = matter_manager.list_matters()
-        return [
-            MatterResponse(
-                id=matter.id,
-                name=matter.name,
-                slug=matter.slug,
-                created_at=matter.created_at.isoformat(),
-                paths={
-                    "root": str(matter.paths.root),
-                    "docs": str(matter.paths.docs),
-                    "vectors": str(matter.paths.vectors),
-                    "knowledge": str(matter.paths.knowledge)
-                }
-            )
-            for matter in matters
-        ]
+        matter_summaries = matter_manager.list_matter_summaries()
+        return matter_summaries
     except Exception as e:
         logger.error("Failed to list matters", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -119,11 +87,44 @@ async def switch_matter(matter_id: str):
     """Switch active Matter context."""
     try:
         matter = matter_manager.switch_matter(matter_id)
-        return {"status": "switched", "matter_id": matter.id, "matter_name": matter.name}
+        logger.info(
+            "Matter switched via API",
+            matter_id=matter.id,
+            matter_name=matter.name,
+            matter_slug=matter.slug
+        )
+        return {
+            "status": "switched", 
+            "matter_id": matter.id, 
+            "matter_name": matter.name,
+            "matter_slug": matter.slug
+        }
     except ValueError as e:
+        logger.warning("Matter not found for switching", matter_id=matter_id)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error("Failed to switch matter", error=str(e))
+        logger.error("Failed to switch matter", matter_id=matter_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/matters/active")
+async def get_active_matter():
+    """Get the currently active Matter."""
+    try:
+        active_matter = matter_manager.get_active_matter()
+        if active_matter is None:
+            return {"active_matter": None}
+        
+        return {
+            "active_matter": {
+                "id": active_matter.id,
+                "name": active_matter.name,
+                "slug": active_matter.slug,
+                "created_at": active_matter.created_at.isoformat()
+            }
+        }
+    except Exception as e:
+        logger.error("Failed to get active matter", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -159,11 +160,11 @@ async def get_job_status(job_id: str):
             raise HTTPException(status_code=404, detail="Job not found")
         
         return {
-            "job_id": job_info.job_id,
+            "id": job_info.job_id,
             "status": job_info.status.value,
             "progress": job_info.progress,
-            "message": job_info.message,
-            "error_message": job_info.error_message
+            "detail": job_info.message,
+            "error": job_info.error_message
         }
     except HTTPException:
         raise

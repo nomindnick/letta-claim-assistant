@@ -11,7 +11,7 @@
 | Sprint | Status | Completed | Duration | Key Deliverables |
 |--------|---------|-----------|----------|------------------|
 | 0 | Completed | 2025-08-14 | 2.5h | Project setup & dependencies |
-| 1 | Not Started | - | - | Matter management & core architecture |
+| 1 | Completed | 2025-08-14 | 3.5h | Matter management & core architecture |
 | 2 | Not Started | - | - | PDF ingestion pipeline |
 | 3 | Not Started | - | - | Vector database & embeddings |
 | 4 | Not Started | - | - | Basic RAG implementation |
@@ -109,9 +109,75 @@ letta-claim-assistant/
 - Ollama models pulled successfully
 
 **Next Sprint Prep:**
-- Sprint 1 ready to proceed with Matter management implementation
-- All foundational infrastructure in place
-- Configuration system operational
+- Sprint 2 ready to proceed with PDF ingestion pipeline
+- Matter management system fully operational 
+- API endpoints tested and functional
+
+### Sprint 1: Core Architecture & Matter Management (Completed 2025-08-14, 3.5h)
+
+**Implementation Summary:**
+- Created comprehensive Pydantic data models for all core entities
+- Implemented full Matter lifecycle management (create, list, switch, delete)
+- Built thread-safe Matter switching with proper isolation guarantees
+- Created complete filesystem structure with all required subdirectories
+- Added robust slug generation with duplicate name handling
+- Implemented per-matter configuration persistence in JSON format
+- Built FastAPI endpoints for all Matter operations
+- Created HTTP client with proper error handling and async support
+- Added comprehensive validation and error handling throughout
+
+**Key Technical Decisions:**
+- Used Pydantic v2 field validators for robust data validation
+- Implemented thread-safe matter switching using threading.Lock
+- Chose UUID4 for matter IDs to ensure global uniqueness
+- Built slug generation that handles special characters and conflicts
+- Created complete directory structure upfront for better reliability
+- Used separate configuration files per matter for better isolation
+- Implemented proper model serialization for API compatibility
+
+**Files Created:**
+- `app/models.py` - Complete Pydantic data models with validation
+- `tests/unit/test_matters.py` - Comprehensive unit test suite
+- `test_sprint1.py` - Functional verification script
+
+**Files Updated:**
+- `app/matters.py` - Complete Matter management implementation
+- `app/api.py` - Added Matter management API endpoints
+- `ui/api_client.py` - Added Matter operation HTTP client methods
+
+**Key Implementation Features:**
+- **Matter Creation:** Validates names, generates unique slugs, creates filesystem
+- **Matter Listing:** Loads from filesystem with error recovery for invalid configs  
+- **Matter Switching:** Thread-safe context switching with proper isolation
+- **Filesystem Management:** Creates complete directory structure per specification
+- **Configuration:** JSON-based per-matter config with global TOML settings
+- **API Integration:** RESTful endpoints with proper HTTP status codes
+- **Validation:** Comprehensive input validation with user-friendly errors
+
+**Testing Results:**
+- All core functionality verified through functional test suite
+- Matter creation, listing, switching working correctly
+- Filesystem structure created properly with all required directories
+- Duplicate name handling generates unique slugs (name, name-1, name-2, etc.)
+- Configuration persistence working for both global and per-matter settings
+- Thread safety verified for concurrent matter switching operations
+- Input validation properly rejects invalid data with clear error messages
+
+**Issues Encountered:**
+- Pydantic v1/v2 compatibility - migrated all validators to v2 field_validator syntax
+- Settings mocking challenges in tests - resolved with direct attribute modification
+- Minor import dependency ordering resolved
+
+**API Endpoints Added:**
+- `POST /api/matters` - Create new matter
+- `GET /api/matters` - List all matters with summaries
+- `POST /api/matters/{id}/switch` - Switch active matter context
+- `GET /api/matters/active` - Get currently active matter
+
+**Next Sprint Prep:**
+- Sprint 2 ready to proceed with PDF ingestion pipeline
+- Matter management provides solid foundation for document processing
+- API client ready for UI integration in later sprints
 
 ---
 

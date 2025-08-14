@@ -75,6 +75,18 @@ class APIClient:
             logger.error("Failed to switch matter", error=str(e))
             raise
     
+    async def get_active_matter(self) -> Optional[Dict[str, Any]]:
+        """Get the currently active Matter."""
+        session = await self._get_session()
+        try:
+            async with session.get(f"{self.base_url}/api/matters/active") as response:
+                response.raise_for_status()
+                result = await response.json()
+                return result.get("active_matter")
+        except Exception as e:
+            logger.error("Failed to get active matter", error=str(e))
+            raise
+    
     # File Upload
     async def upload_files(
         self,
