@@ -17,7 +17,7 @@ from .models import (
 )
 from .logging_conf import get_logger
 from .matters import matter_manager
-from .jobs import job_queue
+from .jobs import job_queue, ensure_job_queue_started
 
 logger = get_logger(__name__)
 
@@ -32,6 +32,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on application startup."""
+    logger.info("Starting Letta Claim Assistant API")
+    await ensure_job_queue_started()
+    logger.info("API startup complete")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up on application shutdown."""
+    logger.info("Shutting down Letta Claim Assistant API")
 
 
 # Pydantic models are now imported from models.py
@@ -132,22 +146,134 @@ async def get_active_matter():
 @app.post("/api/matters/{matter_id}/upload")
 async def upload_files(matter_id: str, files: List[UploadFile] = File(...)):
     """Upload and process PDF files for a Matter."""
+    import tempfile
+    import shutil
+    from pathlib import Path
+    
     try:
-        # TODO: Implement file upload and processing
-        # This should:
-        # 1. Validate matter exists
-        # 2. Save uploaded files to matter's docs directory
-        # 3. Submit background job for processing
-        # 4. Return job ID
+        # Ensure job queue is started
+        await ensure_job_queue_started()
         
-        job_id = await job_queue.submit_job(
-            "pdf_ingestion",
-            {"matter_id": matter_id, "files": [f.filename for f in files]}
+        # 1. Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        if not files:
+            raise HTTPException(status_code=400, detail="No files provided")
+        
+        # 2. Validate and save uploaded files
+        uploaded_files = []
+        temp_files = []
+        
+        for file in files:
+            # Validate file type
+            if not file.filename.lower().endswith('.pdf'):
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Only PDF files are supported. Got: {file.filename}"
+                )
+            
+            # Check file size (limit to 100MB per file)
+            if hasattr(file, 'size') and file.size > 100 * 1024 * 1024:
+                raise HTTPException(
+                    status_code=413, 
+                    detail=f"File too large: {file.filename}. Maximum size is 100MB."
+                )
+            
+            # Create temporary file to save upload
+            temp_file = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+            temp_path = Path(temp_file.name)
+            temp_files.append(temp_path)
+            
+            try:
+                # Copy uploaded file content to temp file
+                content = await file.read()
+                temp_file.write(content)
+                temp_file.flush()
+                temp_file.close()
+                
+                # Validate it's a real PDF by checking header
+                with open(temp_path, 'rb') as f:
+                    header = f.read(4)
+                    if header != b'%PDF':
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid PDF file: {file.filename}"
+                        )
+                
+                uploaded_files.append({
+                    "filename": file.filename,
+                    "path": str(temp_path),
+                    "size": temp_path.stat().st_size,
+                    "content_type": file.content_type
+                })
+                
+                logger.info(
+                    "File uploaded temporarily",
+                    matter_id=matter_id,
+                    filename=file.filename,
+                    size_bytes=temp_path.stat().st_size,
+                    temp_path=str(temp_path)
+                )
+                
+            except Exception as e:
+                # Clean up temp file on error
+                if temp_path.exists():
+                    temp_path.unlink()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to process file {file.filename}: {str(e)}"
+                )
+        
+        # 3. Submit background job for processing
+        job_params = {
+            "matter_id": matter_id,
+            "uploaded_files": uploaded_files,
+            "force_ocr": False,  # Could be made configurable
+            "ocr_language": "eng"  # Could be made configurable
+        }
+        
+        job_id = await job_queue.submit_job("pdf_ingestion", job_params)
+        
+        logger.info(
+            "PDF ingestion job submitted",
+            matter_id=matter_id,
+            job_id=job_id,
+            file_count=len(uploaded_files),
+            total_size_mb=sum(f["size"] for f in uploaded_files) / 1024 / 1024
         )
         
-        return {"job_id": job_id}
+        # 4. Return job ID and file info
+        return {
+            "job_id": job_id,
+            "files_uploaded": len(uploaded_files),
+            "total_size_bytes": sum(f["size"] for f in uploaded_files),
+            "files": [{
+                "filename": f["filename"],
+                "size_bytes": f["size"]
+            } for f in uploaded_files]
+        }
+        
+    except HTTPException:
+        # Clean up temp files on HTTP errors
+        for temp_path in temp_files:
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception:
+                pass
+        raise
     except Exception as e:
-        logger.error("Failed to upload files", error=str(e))
+        # Clean up temp files on unexpected errors
+        for temp_path in temp_files:
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception:
+                pass
+        
+        logger.error("Failed to upload files", matter_id=matter_id, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
