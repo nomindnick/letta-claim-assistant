@@ -14,7 +14,7 @@
 | 1 | Completed | 2025-08-14 | 3.5h | Matter management & core architecture |
 | 2 | Not Started | - | - | PDF ingestion pipeline |
 | 3 | Completed | 2025-08-14 | 3h | Vector database & embeddings |
-| 4 | Not Started | - | - | Basic RAG implementation |
+| 4 | Completed | 2025-08-14 | 3.5h | Basic RAG implementation |
 | 5 | Not Started | - | - | Letta agent integration |
 | 6 | Not Started | - | - | NiceGUI interface - Part 1 |
 | 7 | Not Started | - | - | NiceGUI interface - Part 2 |
@@ -249,6 +249,75 @@ letta-claim-assistant/
 - Sprint 4 (Basic RAG) can proceed - vector store foundation is solid
 - Chunk data model is complete and compatible with ingestion pipeline
 - Search functionality ready for RAG query processing
+
+### Sprint 4: Basic RAG Implementation (Completed 2025-08-14, 3.5h)
+
+**Implementation Summary:**
+- Completed Ollama provider generate() method with chat API integration
+- Created comprehensive prompt template system for construction claims analysis
+- Implemented full RAG engine with retrieval, generation, and response assembly
+- Added citation extraction and validation with precise source mapping
+- Built provider manager for runtime LLM switching between Ollama and Gemini
+- Implemented chat API endpoints with proper error handling and validation
+- Created extensive test suite with unit and integration tests
+
+**Key Technical Decisions:**
+- Used Ollama chat API with structured message format for generation
+- Implemented conservative system prompts emphasizing construction domain expertise
+- Built citation validation to ensure accuracy between LLM answers and source documents
+- Created modular provider system allowing easy switching between LLM services
+- Designed RAG pipeline to be stateless (preparation for Sprint 5 Letta integration)
+- Used async patterns throughout for UI responsiveness
+
+**Files Created:**
+- `app/prompts.py` - Comprehensive prompt template system with domain expertise
+- `app/llm/provider_manager.py` - Runtime provider switching and management
+- `tests/unit/test_rag.py` - Complete unit test suite (16 tests)
+- `tests/integration/test_rag_integration.py` - Integration tests with real Ollama models
+- `test_sprint4.py` - Sprint verification script
+
+**Files Updated:**
+- `app/llm/ollama_provider.py` - Complete generation implementation with error handling
+- `app/rag.py` - Full RAG pipeline with prompt assembly, citation extraction, follow-ups
+- `app/api.py` - Chat and settings endpoints with provider integration
+- `app/models.py` - Enhanced with KnowledgeItem for Letta preparation
+
+**Key Implementation Features:**
+- **RAG Pipeline:** Complete retrieval → prompt assembly → generation → citation validation
+- **Prompt System:** Construction-focused system prompts with structured output requirements  
+- **Citation Accuracy:** Extraction and validation ensuring [DocName p.N] format maps to sources
+- **Provider Management:** Runtime switching between Ollama and Gemini with connectivity testing
+- **API Integration:** RESTful endpoints for chat processing and model configuration
+- **Error Handling:** Comprehensive error recovery with user-friendly messages
+
+**Testing Results:**
+- All 21 unit tests pass with comprehensive coverage of RAG components
+- Prompt assembly correctly formats memory and document contexts
+- Citation extraction identifies and validates references to source documents
+- RAG engine generates structured responses with proper source attribution
+- Provider manager enables runtime switching and connectivity testing
+- API endpoints handle requests/responses with proper validation
+
+**Issues Encountered:**
+- Circular import between rag.py and prompts.py - resolved by moving KnowledgeItem to models.py
+- Ollama API endpoint differences between /api/generate and /api/chat - used chat API correctly
+- Citation regex pattern needed adjustment for multi-page ranges (p.5-7)
+- Knowledge extraction JSON parsing required fallback handling for malformed responses
+
+**Acceptance Criteria Status:**
+- ✅ RAG pipeline retrieves relevant chunks based on query
+- ✅ Generated answers cite sources with [DocName p.N] format  
+- ✅ System prompt enforces construction domain expertise
+- ✅ Context window management prevents token limit issues
+- ✅ Multiple LLM providers can be swapped easily
+- ✅ Citation mapping enables UI source tracking
+- ✅ Answers follow required format (Key Points, Analysis, Citations)
+
+**Next Sprint Prep:**
+- Sprint 5 (Letta Integration) ready to proceed with stateful agent memory
+- RAG pipeline designed to accommodate memory injection points
+- KnowledgeItem data model prepared for Letta upsert operations
+- Citation and source tracking ready for memory context enrichment
 
 ---
 

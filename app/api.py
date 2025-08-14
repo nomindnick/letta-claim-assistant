@@ -18,6 +18,8 @@ from .models import (
 from .logging_conf import get_logger
 from .matters import matter_manager
 from .jobs import job_queue, ensure_job_queue_started
+from .rag import RAGEngine
+from .llm.provider_manager import provider_manager
 
 logger = get_logger(__name__)
 
@@ -39,6 +41,17 @@ async def startup_event():
     """Initialize services on application startup."""
     logger.info("Starting Letta Claim Assistant API")
     await ensure_job_queue_started()
+    
+    # Initialize default Ollama provider
+    try:
+        success = await provider_manager.register_ollama_provider()
+        if success:
+            logger.info("Default Ollama provider registered successfully")
+        else:
+            logger.warning("Failed to register default Ollama provider - models may not be available")
+    except Exception as e:
+        logger.warning("Could not initialize Ollama provider on startup", error=str(e))
+    
     logger.info("API startup complete")
 
 
@@ -304,17 +317,77 @@ async def get_job_status(job_id: str):
 async def chat(request: ChatRequest):
     """Process chat query using RAG pipeline."""
     try:
-        # TODO: Implement chat/RAG processing
-        # This should:
-        # 1. Validate matter exists and is active
-        # 2. Initialize RAG engine for matter
-        # 3. Process query through RAG pipeline
-        # 4. Return structured response
+        logger.info(
+            "Processing chat request",
+            matter_id=request.matter_id,
+            query_preview=request.query[:100],
+            k=request.k,
+            max_tokens=request.max_tokens
+        )
         
-        raise NotImplementedError("Chat endpoint not yet implemented")
+        # 1. Validate matter exists and get matter object
+        matter = matter_manager.get_matter_by_id(request.matter_id)
+        if not matter:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Matter with ID {request.matter_id} not found"
+            )
+        
+        # 2. Get active LLM provider
+        active_provider = provider_manager.get_active_provider()
+        if not active_provider:
+            raise HTTPException(
+                status_code=503,
+                detail="No LLM provider available. Please configure a provider in settings."
+            )
+        
+        # 3. Initialize RAG engine for the matter
+        rag_engine = RAGEngine(
+            matter=matter,
+            llm_provider=active_provider
+        )
+        
+        # 4. Process query through RAG pipeline
+        rag_response = await rag_engine.generate_answer(
+            query=request.query,
+            k=request.k,
+            k_memory=6,  # Default memory items to recall
+            max_tokens=request.max_tokens,
+            temperature=0.2  # Conservative temperature for legal analysis
+        )
+        
+        # 5. Convert RAG response to API response format
+        api_response = ChatResponse(
+            answer=rag_response.answer,
+            sources=rag_response.sources,
+            followups=rag_response.followups,
+            used_memory=rag_response.used_memory
+        )
+        
+        logger.info(
+            "Chat request completed successfully",
+            matter_id=request.matter_id,
+            answer_length=len(rag_response.answer),
+            sources_count=len(rag_response.sources),
+            followups_count=len(rag_response.followups)
+        )
+        
+        return api_response
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions (404, 503, etc.)
+        raise
+    except ValueError as e:
+        logger.error("Invalid chat request", error=str(e), matter_id=request.matter_id)
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error("Failed to process chat request", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(
+            "Failed to process chat request", 
+            error=str(e), 
+            matter_id=request.matter_id,
+            query_preview=request.query[:100] if request.query else "None"
+        )
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
 # Settings / Models Endpoints
@@ -322,24 +395,148 @@ async def chat(request: ChatRequest):
 async def get_model_settings():
     """Get current model and provider settings."""
     try:
-        # TODO: Implement settings retrieval
-        # Return current provider, models, and available options
-        raise NotImplementedError("Model settings endpoint not yet implemented")
+        logger.debug("Getting model settings")
+        
+        # Get provider configuration
+        provider_config = provider_manager.get_provider_config()
+        
+        # Get list of all providers with details
+        all_providers = provider_manager.list_providers()
+        
+        # Test connectivity of active providers
+        test_results = {}
+        if provider_config.get("active_provider"):
+            test_results["generation"] = await provider_manager.test_provider(
+                provider_config["active_provider"]
+            )
+        
+        if provider_config.get("active_embedding_provider"):
+            test_results["embedding"] = await provider_manager.test_provider(
+                provider_config["active_embedding_provider"]
+            )
+        
+        response = {
+            "active_provider": provider_config.get("active_provider"),
+            "active_embedding_provider": provider_config.get("active_embedding_provider"),
+            "providers": all_providers,
+            "connectivity": test_results,
+            "provider_count": len(all_providers)
+        }
+        
+        logger.debug(
+            "Model settings retrieved",
+            active_provider=provider_config.get("active_provider"),
+            provider_count=len(all_providers)
+        )
+        
+        return response
+        
     except Exception as e:
         logger.error("Failed to get model settings", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ProviderTestRequest(BaseModel):
+    """Request model for provider testing and configuration."""
+    provider_type: str  # "ollama" or "gemini"
+    generation_model: Optional[str] = None
+    embedding_model: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    test_only: bool = False  # If True, only test connection without registering
+
+
 @app.post("/api/settings/models")
-async def update_model_settings(settings: ModelSettings):
+async def update_model_settings(request: ProviderTestRequest):
     """Update model and provider settings."""
     try:
-        # TODO: Implement settings update
-        # Test connection, update configuration, return success status
-        raise NotImplementedError("Model settings update not yet implemented")
+        logger.info(
+            "Updating model settings",
+            provider_type=request.provider_type,
+            generation_model=request.generation_model,
+            test_only=request.test_only
+        )
+        
+        success = False
+        error_message = None
+        
+        if request.provider_type.lower() == "ollama":
+            # Configure Ollama provider
+            generation_model = request.generation_model or "gpt-oss:20b"
+            embedding_model = request.embedding_model or "nomic-embed-text"
+            base_url = request.base_url or "http://localhost:11434"
+            
+            success = await provider_manager.register_ollama_provider(
+                model=generation_model,
+                embedding_model=embedding_model,
+                base_url=base_url
+            )
+            
+            if not success:
+                error_message = f"Failed to connect to Ollama at {base_url} with model {generation_model}"
+        
+        elif request.provider_type.lower() == "gemini":
+            # Configure Gemini provider
+            if not request.api_key:
+                raise HTTPException(status_code=400, detail="API key required for Gemini provider")
+            
+            generation_model = request.generation_model or "gemini-2.0-flash-exp"
+            
+            success = await provider_manager.register_gemini_provider(
+                api_key=request.api_key,
+                model=generation_model
+            )
+            
+            if not success:
+                error_message = f"Failed to connect to Gemini API with model {generation_model}"
+        
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported provider type: {request.provider_type}"
+            )
+        
+        # Perform a quick test if requested
+        test_result = None
+        if success and not request.test_only:
+            test_result = await provider_manager.quick_test_generation()
+        
+        response = {
+            "success": success,
+            "provider_type": request.provider_type,
+            "generation_model": request.generation_model,
+            "embedding_model": request.embedding_model,
+            "test_result": test_result,
+            "error": error_message
+        }
+        
+        if success:
+            logger.info(
+                "Model settings updated successfully",
+                provider_type=request.provider_type,
+                generation_model=request.generation_model
+            )
+        else:
+            logger.warning(
+                "Model settings update failed",
+                provider_type=request.provider_type,
+                error=error_message
+            )
+        
+        return response
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to update model settings", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/settings/test-provider")
+async def test_provider_connectivity(request: ProviderTestRequest):
+    """Test provider connectivity without registering."""
+    request.test_only = True
+    return await update_model_settings(request)
 
 
 # Health check endpoint

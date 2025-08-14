@@ -44,8 +44,73 @@ class OllamaProvider(BaseLLMProvider):
         Returns:
             Generated text response
         """
-        # TODO: Implement Ollama generation
-        raise NotImplementedError("Ollama generation not yet implemented")
+        if not messages:
+            raise ValueError("No messages provided for generation")
+        
+        # Format messages with system prompt
+        formatted_messages = self._format_messages(system, messages)
+        
+        payload = {
+            "model": self.model_name,
+            "messages": formatted_messages,
+            "stream": False,  # For now, use non-streaming for simplicity
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+                "stop": ["<|end|>", "<|im_end|>"]  # Common stop tokens
+            }
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                logger.debug(
+                    "Sending generation request to Ollama",
+                    model=self.model_name,
+                    message_count=len(formatted_messages),
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                )
+                
+                async with session.post(
+                    self.chat_url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=120)  # 2 minute timeout for generation
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(
+                            "Ollama generation request failed",
+                            status=response.status,
+                            error=error_text,
+                            model=self.model_name
+                        )
+                        raise RuntimeError(f"Ollama generation failed: HTTP {response.status} - {error_text}")
+                    
+                    data = await response.json()
+                    
+                    # Extract response content
+                    if "message" in data and "content" in data["message"]:
+                        generated_text = data["message"]["content"]
+                        
+                        logger.debug(
+                            "Generation completed",
+                            model=self.model_name,
+                            response_length=len(generated_text),
+                            prompt_eval_count=data.get("prompt_eval_count", 0),
+                            eval_count=data.get("eval_count", 0)
+                        )
+                        
+                        return generated_text.strip()
+                    else:
+                        logger.error("Invalid response format from Ollama", response_data=data)
+                        raise RuntimeError("Invalid response format from Ollama API")
+                        
+        except asyncio.TimeoutError:
+            logger.error("Ollama generation timeout", model=self.model_name, timeout=120)
+            raise RuntimeError(f"Generation timed out after 120 seconds")
+        except Exception as e:
+            logger.error("Ollama generation error", error=str(e), model=self.model_name)
+            raise RuntimeError(f"Generation failed: {str(e)}")
     
     async def test_connection(self) -> bool:
         """Test connection to Ollama server."""
