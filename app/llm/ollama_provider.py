@@ -69,7 +69,7 @@ class OllamaEmbeddings(BaseEmbeddingProvider):
     def __init__(self, model: str = "nomic-embed-text", base_url: str = "http://localhost:11434"):
         super().__init__(model)
         self.base_url = base_url
-        self.embed_url = f"{base_url}/api/embeddings"
+        self.embed_url = f"{base_url}/api/embed"
     
     async def embed(self, texts: List[str]) -> List[List[float]]:
         """
@@ -119,8 +119,8 @@ class OllamaEmbeddings(BaseEmbeddingProvider):
                                 continue
                             
                             data = await response.json()
-                            if "embedding" in data and data["embedding"]:
-                                batch_embeddings.append(data["embedding"])
+                            if "embeddings" in data and data["embeddings"] and len(data["embeddings"]) > 0:
+                                batch_embeddings.append(data["embeddings"][0])
                             else:
                                 logger.warning("Empty embeddings response", text_preview=text[:100])
                                 batch_embeddings.append([0.0] * 768)
@@ -176,7 +176,7 @@ class OllamaEmbeddings(BaseEmbeddingProvider):
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return "embedding" in data and data["embedding"]
+                        return "embeddings" in data and data["embeddings"] and len(data["embeddings"]) > 0
                     else:
                         error_text = await response.text()
                         logger.error(

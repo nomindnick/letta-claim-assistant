@@ -225,10 +225,16 @@ letta-claim-assistant/
 - Large collection handling tested up to 50+ chunks with good performance
 
 **Issues Encountered:**
-- Ollama embeddings API returning empty arrays for test inputs (model configuration issue)
-- Fixed API response format ({"embedding": [...]} vs {"embeddings": [...]})
+- Ollama embeddings API endpoint confusion - needed `/api/embed` instead of `/api/embeddings`
+- Fixed API response format ({"embeddings": [[...]]} vs {"embedding": [...]})
 - ChromaDB collection naming restrictions required sanitization of special characters
 - Model name tag handling needed adjustment for "nomic-embed-text:latest" format
+
+**Issues Resolved (2025-08-14 Update):**
+- ✅ Ollama embeddings API fixed - using correct `/api/embed` endpoint
+- ✅ Both `nomic-embed-text` (768-dim) and `mxbai-embed-large` (1024-dim) models working
+- ✅ Real embeddings generating high-quality similarity scores (0.8-0.9+ for relevant matches)
+- ✅ End-to-end vector operations tested and verified working
 
 **Acceptance Criteria Status:**
 - ✅ Each Matter has isolated Chroma collection
@@ -237,7 +243,7 @@ letta-claim-assistant/
 - ✅ Large document collections handle efficiently
 - ✅ Collection switching works without cross-contamination
 - ✅ Embedding model can be changed per Matter
-- ⚠️ Embeddings generated consistently with Ollama (API issues noted)
+- ✅ Embeddings generated consistently with Ollama
 
 **Next Sprint Prep:**
 - Sprint 4 (Basic RAG) can proceed - vector store foundation is solid
