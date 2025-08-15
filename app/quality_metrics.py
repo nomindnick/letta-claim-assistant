@@ -14,7 +14,7 @@ import math
 from statistics import mean, stdev
 
 from .logging_conf import get_logger
-from .rag import SourceChunk
+from .models import SourceChunk
 from .models import KnowledgeItem
 from .citation_manager import CitationMapping, CitationMetrics
 from .followup_engine import FollowupSuggestion

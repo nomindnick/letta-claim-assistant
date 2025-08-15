@@ -64,8 +64,8 @@ class TestMatterManager:
         assert isinstance(matter.id, str)
         assert len(matter.id) == 36  # UUID4 length
         assert isinstance(matter.created_at, datetime)
-        assert matter.embedding_model == "test-embed-model"
-        assert matter.generation_model == "test-llm-model"
+        assert matter.embedding_model == "nomic-embed-text"
+        assert matter.generation_model == "gpt-oss:20b"
         
         # Verify filesystem structure
         expected_root = matter_manager.data_root / f"Matter_{matter.slug}"
@@ -302,7 +302,7 @@ class TestMatterPaths:
         
         # Should be able to serialize to JSON
         paths_dict = paths.model_dump()
-        assert all(isinstance(v, Path) for v in paths_dict.values())
+        assert all(isinstance(v, str) for v in paths_dict.values())
         
         # JSON encoding should convert paths to strings
         import json

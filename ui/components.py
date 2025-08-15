@@ -224,7 +224,7 @@ class KeyboardShortcuts:
         }
         
         # Register with NiceGUI
-        ui.keyboard(callback, key)
+        ui.keyboard(on_key=callback)
     
     def show_help(self):
         """Show keyboard shortcuts help dialog."""

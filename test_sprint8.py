@@ -19,7 +19,8 @@ from app.citation_manager import CitationManager, CitationMapping, CitationMetri
 from app.followup_engine import FollowupEngine, FollowupContext, FollowupCategory
 from app.hybrid_retrieval import HybridRetrieval, create_retrieval_context, RetrievalWeights
 from app.quality_metrics import QualityAnalyzer, QualityThresholds
-from app.rag import RAGEngine, SourceChunk
+from app.rag import RAGEngine
+from app.models import SourceChunk
 from app.vectors import SearchResult, VectorStore
 from app.models import Matter, MatterPaths, KnowledgeItem
 from app.llm.ollama_provider import OllamaProvider

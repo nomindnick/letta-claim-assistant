@@ -16,7 +16,7 @@ from app.quality_metrics import (
 )
 from app.citation_manager import CitationMapping, CitationMetrics
 from app.followup_engine import FollowupSuggestion, FollowupCategory
-from app.rag import SourceChunk
+from app.models import SourceChunk
 from app.models import KnowledgeItem
 
 

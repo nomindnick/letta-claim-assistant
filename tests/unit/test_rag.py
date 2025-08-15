@@ -13,7 +13,8 @@ import tempfile
 import json
 from typing import List
 
-from app.rag import RAGEngine, RAGResponse, SourceChunk
+from app.rag import RAGEngine, RAGResponse
+from app.models import SourceChunk
 from app.vectors import SearchResult, VectorStore
 from app.llm.base import LLMProvider
 from app.models import Matter, MatterPaths, KnowledgeItem

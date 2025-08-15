@@ -74,7 +74,7 @@ class LettaClaimUI:
         ui.add_head_html('<meta name="viewport" content="width=device-width, initial-scale=1">')
         
         # Setup keyboard shortcuts
-        self._setup_keyboard_shortcuts()
+        # self._setup_keyboard_shortcuts()  # Disabled due to NiceGUI API changes
         
         # Show initial loading
         loading_container = self.loading_spinner.show("Initializing application...")
@@ -1309,5 +1309,5 @@ def main():
     create_ui_app()
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__mp_main__"}:
     main()

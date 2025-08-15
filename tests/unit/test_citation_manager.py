@@ -12,7 +12,7 @@ from typing import List
 from app.citation_manager import (
     CitationManager, CitationMapping, CitationMetrics
 )
-from app.rag import SourceChunk
+from app.models import SourceChunk
 
 
 class TestCitationManager:

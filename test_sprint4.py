@@ -10,7 +10,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock
 
-from app.rag import RAGEngine, SourceChunk
+from app.rag import RAGEngine
+from app.models import SourceChunk
 from app.vectors import SearchResult, VectorStore
 from app.models import Matter, MatterPaths, KnowledgeItem
 from app.llm.provider_manager import provider_manager

@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 from typing import List
 
-from app.rag import RAGEngine, RAGResponse, SourceChunk
+from app.rag import RAGEngine, RAGResponse
+from app.models import SourceChunk
 from app.vectors import VectorStore
 from app.models import Matter, MatterPaths, KnowledgeItem
 from app.citation_manager import CitationManager, CitationMetrics

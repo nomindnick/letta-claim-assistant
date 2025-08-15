@@ -20,9 +20,9 @@ class TestTextChunker:
     def chunker(self):
         """Create TextChunker instance."""
         return TextChunker(
-            target_size=1000,  # tokens
+            target_tokens=1000,  # tokens
             overlap_percent=0.15,
-            min_chunk_size=100
+            min_chunk_tokens=100
         )
     
     @pytest.fixture
@@ -64,19 +64,19 @@ class TestTextChunker:
         """Test TextChunker initialization with various parameters."""
         # Default parameters
         chunker = TextChunker()
-        assert chunker.target_size == 1000
+        assert chunker.target_tokens == 1000
         assert chunker.overlap_percent == 0.15
-        assert chunker.min_chunk_size == 100
+        assert chunker.min_chunk_tokens == 50
         
         # Custom parameters
         custom_chunker = TextChunker(
-            target_size=800,
+            target_tokens=800,
             overlap_percent=0.2,
-            min_chunk_size=50
+            min_chunk_tokens=50
         )
-        assert custom_chunker.target_size == 800
+        assert custom_chunker.target_tokens == 800
         assert custom_chunker.overlap_percent == 0.2
-        assert custom_chunker.min_chunk_size == 50
+        assert custom_chunker.min_chunk_tokens == 50
     
     @pytest.mark.unit
     def test_chunk_short_document(self, chunker, sample_pages):
@@ -256,7 +256,7 @@ class TestTextChunker:
     @pytest.mark.unit
     def test_min_chunk_size_enforcement(self):
         """Test that minimum chunk size is enforced."""
-        chunker = TextChunker(min_chunk_size=50)
+        chunker = TextChunker(min_chunk_tokens=50)
         
         small_pages = [
             PageContent(
@@ -297,7 +297,7 @@ class TestTextChunker:
         )
         
         # Check that most chunks are reasonably close to target size
-        target_tokens = chunker.target_size
+        target_tokens = chunker.target_tokens
         tolerance = 0.5  # 50% tolerance
         
         within_tolerance = 0

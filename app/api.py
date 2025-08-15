@@ -1555,3 +1555,11 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup on shutdown."""
     logger.info("Shutting down Letta Claim Assistant API")
+
+
+def create_app() -> FastAPI:
+    """Create and return the configured FastAPI application.
+    
+    This function is used by tests and deployment scripts to get the app instance.
+    """
+    return app
