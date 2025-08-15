@@ -30,6 +30,9 @@ letta-client>=0.1.0
 # Configuration management  
 tomli>=2.0.0
 
+# Cryptography for secure credential storage
+cryptography>=3.4.0
+
 # HTTP client
 aiohttp>=3.8.0
 

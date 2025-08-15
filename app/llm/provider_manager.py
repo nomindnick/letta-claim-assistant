@@ -8,10 +8,14 @@ and switching between them without application restart.
 from typing import Dict, Any, Optional, List
 from enum import Enum
 import asyncio
+import json
+from pathlib import Path
+from datetime import datetime
 
 from .base import LLMProvider, EmbeddingProvider
 from .ollama_provider import OllamaProvider, OllamaEmbeddings
 from ..logging_conf import get_logger
+from ..privacy_consent import consent_manager, ConsentType
 
 logger = get_logger(__name__)
 
@@ -30,8 +34,90 @@ class ProviderManager:
         self._embedding_providers: Dict[str, EmbeddingProvider] = {}
         self._active_provider: Optional[str] = None
         self._active_embedding_provider: Optional[str] = None
+        self._provider_metrics: Dict[str, Dict[str, Any]] = {}
+        
+        # State persistence
+        self._state_file = Path.home() / ".letta-claim" / "provider_state.json"
+        self._state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._load_state()
         
         logger.info("Provider manager initialized")
+    
+    def _load_state(self) -> None:
+        """Load provider state from disk."""
+        if self._state_file.exists():
+            try:
+                with open(self._state_file, 'r') as f:
+                    state = json.load(f)
+                
+                self._active_provider = state.get("active_provider")
+                self._active_embedding_provider = state.get("active_embedding_provider")
+                self._provider_metrics = state.get("provider_metrics", {})
+                
+                logger.debug("Loaded provider state", active_provider=self._active_provider)
+                
+            except Exception as e:
+                logger.error("Failed to load provider state", error=str(e))
+    
+    def _save_state(self) -> None:
+        """Save provider state to disk."""
+        try:
+            state = {
+                "active_provider": self._active_provider,
+                "active_embedding_provider": self._active_embedding_provider,
+                "provider_metrics": self._provider_metrics,
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            with open(self._state_file, 'w') as f:
+                json.dump(state, f, indent=2)
+                
+            logger.debug("Saved provider state")
+            
+        except Exception as e:
+            logger.error("Failed to save provider state", error=str(e))
+    
+    def _record_provider_metric(
+        self, 
+        provider_key: str, 
+        metric_type: str, 
+        value: Any,
+        timestamp: Optional[datetime] = None
+    ) -> None:
+        """Record a metric for a provider."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        
+        if provider_key not in self._provider_metrics:
+            self._provider_metrics[provider_key] = {
+                "response_times": [],
+                "success_count": 0,
+                "error_count": 0,
+                "last_used": None,
+                "total_requests": 0
+            }
+        
+        metrics = self._provider_metrics[provider_key]
+        
+        if metric_type == "response_time":
+            metrics["response_times"].append({
+                "time": value,
+                "timestamp": timestamp.isoformat()
+            })
+            # Keep only last 100 response times
+            if len(metrics["response_times"]) > 100:
+                metrics["response_times"] = metrics["response_times"][-100:]
+        
+        elif metric_type == "success":
+            metrics["success_count"] += 1
+            metrics["total_requests"] += 1
+            metrics["last_used"] = timestamp.isoformat()
+        
+        elif metric_type == "error":
+            metrics["error_count"] += 1
+            metrics["total_requests"] += 1
+        
+        self._save_state()
     
     async def register_ollama_provider(
         self, 
@@ -100,10 +186,22 @@ class ProviderManager:
     async def register_gemini_provider(
         self, 
         api_key: str,
-        model: str = "gemini-2.0-flash-exp"
-    ) -> bool:
-        """Register Gemini provider with API key."""
+        model: str = "gemini-2.0-flash-exp",
+        check_consent: bool = True
+    ) -> Dict[str, Any]:
+        """Register Gemini provider with API key and consent checking."""
         try:
+            # Check consent first if required
+            if check_consent:
+                consent_requirements = consent_manager.get_consent_requirements("gemini")
+                if consent_requirements["requires_consent"] and not consent_requirements["consent_granted"]:
+                    return {
+                        "success": False,
+                        "error": "consent_required",
+                        "message": "User consent required for external LLM usage",
+                        "consent_requirements": consent_requirements
+                    }
+            
             # Import here to avoid dependency issues if google-genai not installed
             from .gemini_provider import GeminiProvider
             
@@ -115,10 +213,26 @@ class ProviderManager:
                     "Failed to connect to Gemini API",
                     model=model
                 )
-                return False
+                return {
+                    "success": False,
+                    "error": "connection_failed",
+                    "message": "Failed to connect to Gemini API. Please check your API key."
+                }
             
             provider_key = f"gemini_{model}"
             self._providers[provider_key] = provider
+            
+            # Initialize metrics for new provider
+            if provider_key not in self._provider_metrics:
+                self._provider_metrics[provider_key] = {
+                    "response_times": [],
+                    "success_count": 0,
+                    "error_count": 0,
+                    "last_used": None,
+                    "total_requests": 0
+                }
+            
+            self._save_state()
             
             logger.info(
                 "Gemini provider registered successfully",
@@ -126,18 +240,31 @@ class ProviderManager:
                 provider_key=provider_key
             )
             
-            return True
+            return {
+                "success": True,
+                "provider_key": provider_key,
+                "model": model,
+                "message": "Gemini provider registered successfully"
+            }
             
         except ImportError:
             logger.error("Gemini provider not available - google-genai package not installed")
-            return False
+            return {
+                "success": False,
+                "error": "dependency_missing",
+                "message": "Gemini provider not available - google-generativeai package not installed"
+            }
         except Exception as e:
             logger.error(
                 "Failed to register Gemini provider",
                 model=model,
                 error=str(e)
             )
-            return False
+            return {
+                "success": False,
+                "error": "registration_failed",
+                "message": f"Failed to register Gemini provider: {str(e)}"
+            }
     
     def get_active_provider(self) -> Optional[LLMProvider]:
         """Get the currently active LLM provider."""
@@ -246,8 +373,44 @@ class ProviderManager:
             "active_provider": self._active_provider,
             "active_embedding_provider": self._active_embedding_provider,
             "registered_providers": list(self._providers.keys()),
-            "registered_embedding_providers": list(self._embedding_providers.keys())
+            "registered_embedding_providers": list(self._embedding_providers.keys()),
+            "provider_metrics": self._provider_metrics
         }
+    
+    def get_provider_metrics(self, provider_key: Optional[str] = None) -> Dict[str, Any]:
+        """Get performance metrics for providers."""
+        if provider_key:
+            return self._provider_metrics.get(provider_key, {})
+        else:
+            # Return summary metrics for all providers
+            summary = {}
+            for key, metrics in self._provider_metrics.items():
+                avg_response_time = 0
+                if metrics["response_times"]:
+                    avg_response_time = sum(
+                        rt["time"] for rt in metrics["response_times"]
+                    ) / len(metrics["response_times"])
+                
+                success_rate = 0
+                if metrics["total_requests"] > 0:
+                    success_rate = metrics["success_count"] / metrics["total_requests"]
+                
+                summary[key] = {
+                    "avg_response_time": round(avg_response_time, 2),
+                    "success_rate": round(success_rate, 2),
+                    "total_requests": metrics["total_requests"],
+                    "last_used": metrics["last_used"]
+                }
+            
+            return summary
+    
+    def check_provider_consent(self, provider_name: str) -> Dict[str, Any]:
+        """Check consent status for a provider."""
+        return consent_manager.get_consent_requirements(provider_name)
+    
+    def grant_provider_consent(self, provider_name: str) -> bool:
+        """Grant consent for external provider usage."""
+        return consent_manager.grant_consent(ConsentType.EXTERNAL_LLM, provider_name)
     
     async def quick_test_generation(self, provider_key: Optional[str] = None) -> Dict[str, Any]:
         """Perform a quick generation test."""

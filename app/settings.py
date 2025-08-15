@@ -6,10 +6,13 @@ persistence, environment variable integration, and validation with defaults.
 """
 
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import tomllib
 import json
+import base64
 from dataclasses import dataclass
+from cryptography.fernet import Fernet
+import os
 
 
 @dataclass
@@ -46,6 +49,8 @@ class Settings:
     _instance: Optional['Settings'] = None
     _global_config: GlobalConfig
     _config_path: Path
+    _credentials_path: Path
+    _encryption_key: bytes
     
     def __new__(cls) -> 'Settings':
         if cls._instance is None:
@@ -56,8 +61,25 @@ class Settings:
     def _initialize(self) -> None:
         """Initialize settings from configuration files."""
         self._config_path = Path.home() / ".letta-claim" / "config.toml"
+        self._credentials_path = Path.home() / ".letta-claim" / "credentials.json"
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        self._setup_encryption()
         self._load_global_config()
+    
+    def _setup_encryption(self) -> None:
+        """Set up encryption for secure credential storage."""
+        key_file = Path.home() / ".letta-claim" / ".key"
+        
+        if key_file.exists():
+            with open(key_file, 'rb') as f:
+                self._encryption_key = f.read()
+        else:
+            # Generate new encryption key
+            self._encryption_key = Fernet.generate_key()
+            with open(key_file, 'wb') as f:
+                f.write(self._encryption_key)
+            # Secure the key file
+            os.chmod(key_file, 0o600)
     
     def _load_global_config(self) -> None:
         """Load global configuration with defaults."""
@@ -184,6 +206,97 @@ enable_filesystem = {str(self._global_config.letta_enable_filesystem).lower()}
                 json.dump(config, f, indent=2, default=str)
         except Exception as e:
             print(f"Error: Failed to save matter config to {config_path}: {e}")
+    
+    def store_credential(self, provider: str, credential_type: str, credential_value: str) -> bool:
+        """Store encrypted credential for a provider."""
+        try:
+            # Load existing credentials
+            credentials = self._load_credentials()
+            
+            # Encrypt the credential
+            fernet = Fernet(self._encryption_key)
+            encrypted_value = fernet.encrypt(credential_value.encode())
+            
+            # Store the encrypted credential
+            if provider not in credentials:
+                credentials[provider] = {}
+            
+            credentials[provider][credential_type] = base64.b64encode(encrypted_value).decode()
+            
+            # Save credentials
+            self._save_credentials(credentials)
+            return True
+            
+        except Exception as e:
+            print(f"Error: Failed to store credential: {e}")
+            return False
+    
+    def get_credential(self, provider: str, credential_type: str) -> Optional[str]:
+        """Get decrypted credential for a provider."""
+        try:
+            credentials = self._load_credentials()
+            
+            if provider not in credentials or credential_type not in credentials[provider]:
+                return None
+            
+            # Decrypt the credential
+            fernet = Fernet(self._encryption_key)
+            encrypted_value = base64.b64decode(credentials[provider][credential_type])
+            decrypted_value = fernet.decrypt(encrypted_value).decode()
+            
+            return decrypted_value
+            
+        except Exception as e:
+            print(f"Error: Failed to get credential: {e}")
+            return None
+    
+    def delete_credential(self, provider: str, credential_type: str) -> bool:
+        """Delete a stored credential."""
+        try:
+            credentials = self._load_credentials()
+            
+            if provider in credentials and credential_type in credentials[provider]:
+                del credentials[provider][credential_type]
+                
+                # Remove provider entry if empty
+                if not credentials[provider]:
+                    del credentials[provider]
+                
+                self._save_credentials(credentials)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error: Failed to delete credential: {e}")
+            return False
+    
+    def list_stored_credentials(self) -> Dict[str, List[str]]:
+        """List all stored credentials by provider."""
+        try:
+            credentials = self._load_credentials()
+            return {
+                provider: list(creds.keys()) 
+                for provider, creds in credentials.items()
+            }
+        except Exception:
+            return {}
+    
+    def _load_credentials(self) -> Dict[str, Dict[str, str]]:
+        """Load encrypted credentials from disk."""
+        if self._credentials_path.exists():
+            try:
+                with open(self._credentials_path, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+    
+    def _save_credentials(self, credentials: Dict[str, Dict[str, str]]) -> None:
+        """Save encrypted credentials to disk."""
+        with open(self._credentials_path, 'w') as f:
+            json.dump(credentials, f, indent=2)
+        # Secure the credentials file
+        os.chmod(self._credentials_path, 0o600)
 
 
 # Global settings instance

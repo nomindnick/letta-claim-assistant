@@ -60,26 +60,109 @@ class GeminiProvider(BaseLLMProvider):
         Returns:
             Generated text response
         """
-        # TODO: Implement Gemini generation
-        raise NotImplementedError("Gemini generation not yet implemented")
+        if not self.model:
+            raise RuntimeError("Gemini model not initialized. Check API key.")
+        
+        if not messages:
+            raise ValueError("No messages provided for generation")
+        
+        try:
+            # Format the full prompt including system prompt and messages
+            prompt = self._format_messages_for_gemini(system, messages)
+            
+            logger.debug(
+                "Sending generation request to Gemini",
+                model=self.model_name,
+                prompt_length=len(prompt),
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            
+            # Configure generation parameters
+            generation_config = genai.types.GenerationConfig(
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+                top_p=0.8,
+                top_k=40
+            )
+            
+            # Generate response
+            response = await self._async_generate_content(
+                prompt=prompt,
+                generation_config=generation_config
+            )
+            
+            # Extract text from response
+            if response and response.text:
+                generated_text = response.text.strip()
+                
+                logger.debug(
+                    "Gemini generation completed",
+                    model=self.model_name,
+                    response_length=len(generated_text),
+                    prompt_feedback=getattr(response, 'prompt_feedback', None)
+                )
+                
+                return generated_text
+            else:
+                error_msg = "Empty response from Gemini API"
+                if response and hasattr(response, 'prompt_feedback'):
+                    error_msg += f" - Prompt feedback: {response.prompt_feedback}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+                
+        except Exception as e:
+            logger.error(
+                "Gemini generation error",
+                error=str(e),
+                model=self.model_name,
+                error_type=type(e).__name__
+            )
+            raise RuntimeError(f"Gemini generation failed: {str(e)}")
+    
+    async def _async_generate_content(self, prompt: str, generation_config) -> Any:
+        """Async wrapper for Gemini's generate_content method."""
+        import asyncio
+        
+        # Run the synchronous Gemini API call in a thread pool
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.model.generate_content(
+                prompt,
+                generation_config=generation_config,
+                safety_settings=self.safety_settings
+            )
+        )
     
     async def test_connection(self) -> bool:
         """Test connection to Gemini API."""
         if not self.api_key or not self.model:
+            logger.warning("Gemini test failed: API key or model not configured")
             return False
         
         try:
-            # Simple test generation
-            response = self.model.generate_content(
-                "Test connection. Respond with 'OK'.",
-                generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=10,
-                    temperature=0.1,
-                )
+            # Simple test generation using async wrapper
+            generation_config = genai.types.GenerationConfig(
+                max_output_tokens=10,
+                temperature=0.1,
             )
-            return "OK" in response.text.upper()
+            
+            response = await self._async_generate_content(
+                prompt="Test connection. Respond with 'OK'.",
+                generation_config=generation_config
+            )
+            
+            if response and response.text:
+                result = "OK" in response.text.upper()
+                logger.debug("Gemini connection test result", success=result, response=response.text)
+                return result
+            else:
+                logger.warning("Gemini connection test: empty response")
+                return False
+                
         except Exception as e:
-            logger.error("Gemini connection test failed", error=str(e))
+            logger.error("Gemini connection test failed", error=str(e), error_type=type(e).__name__)
             return False
     
     def _default_safety_settings(self) -> List[Dict[str, Any]]:
@@ -109,5 +192,29 @@ class GeminiProvider(BaseLLMProvider):
         messages: List[Dict[str, str]]
     ) -> str:
         """Format messages into single prompt for Gemini."""
-        # TODO: Implement message formatting for Gemini
-        raise NotImplementedError("Message formatting not yet implemented")
+        # Start with system prompt
+        prompt_parts = []
+        
+        if system:
+            prompt_parts.append(f"System: {system}\n")
+        
+        # Add conversation messages
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            
+            if role == "system":
+                # Skip system messages as we handle them separately
+                continue
+            elif role == "user":
+                prompt_parts.append(f"Human: {content}")
+            elif role == "assistant":
+                prompt_parts.append(f"Assistant: {content}")
+            else:
+                # Handle any other roles as generic
+                prompt_parts.append(f"{role.title()}: {content}")
+        
+        # Add final prompt for assistant response
+        prompt_parts.append("Assistant:")
+        
+        return "\n\n".join(prompt_parts)

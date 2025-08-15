@@ -77,6 +77,9 @@ class LettaClaimUI:
         
         # Start background job polling
         ui.timer(2.0, self._poll_job_status)
+        
+        # Initialize consent checking for any existing external providers
+        await self._check_provider_consent_status()
     
     async def _check_backend_connection(self):
         """Check if backend API is available."""
@@ -301,22 +304,38 @@ class LettaClaimUI:
         try:
             provider = self.provider_select.value
             generation_model = self.generation_model_input.value
-            embedding_model = self.embedding_model_input.value
             api_key = self.api_key_input.value if provider == 'gemini' else None
             
-            # Test via API
-            test_result = await self.api_client.update_model_settings(
-                provider=provider,
-                generation_model=generation_model,
-                embedding_model=embedding_model,
-                api_key=api_key
-            )
+            # Show loading indicator
+            with ui.dialog() as test_dialog:
+                with ui.card().classes('w-64 p-4'):
+                    ui.label('Testing connection...').classes('text-center mb-2')
+                    ui.spinner(size='lg').classes('mx-auto')
             
-            if test_result.get('success', False):
-                ui.notify(f"✓ {provider.title()} connection successful", type="positive")
-            else:
-                error_msg = test_result.get('error', 'Unknown error')
-                ui.notify(f"✗ Connection failed: {error_msg}", type="negative")
+            test_dialog.open()
+            
+            try:
+                # Test with consent checking
+                response = await self._test_provider_with_consent(
+                    provider_type=provider,
+                    generation_model=generation_model,
+                    api_key=api_key
+                )
+                
+                test_dialog.close()
+                
+                if response and response.get("success"):
+                    ui.notify(f"✓ {provider.title()} connection successful", type="positive")
+                elif response and response.get("error") == "consent_required":
+                    # Consent dialog is already shown, just provide feedback
+                    ui.notify("Please respond to the consent dialog to continue.", type="info")
+                else:
+                    error_msg = response.get("message") if response else "Unknown error"
+                    ui.notify(f"✗ Connection failed: {error_msg}", type="negative")
+                    
+            except Exception as e:
+                test_dialog.close()
+                raise e
                 
         except Exception as e:
             logger.error("Failed to test provider", error=str(e))
@@ -1005,6 +1024,148 @@ class LettaClaimUI:
                 ui.run_javascript(f'document.title = "Letta Claims ({active_count} processing...)"')
         else:
             ui.run_javascript('document.title = "Letta Construction Claim Assistant"')
+    
+    async def _check_provider_consent_status(self):
+        """Check consent status for external providers."""
+        try:
+            # Check if Gemini is configured and needs consent
+            response = await self.api_client.get("api/consent/gemini")
+            if response and response.get("requires_consent") and not response.get("consent_granted"):
+                # Show consent reminder in settings
+                ui.notify(
+                    "External LLM consent required. Please review privacy settings.",
+                    type="info",
+                    position="top-right",
+                    timeout=5000
+                )
+        except Exception as e:
+            logger.debug("Could not check consent status", error=str(e))
+    
+    async def _show_consent_dialog(self, provider: str, provider_info: dict):
+        """Show consent dialog for external provider."""
+        with ui.dialog() as dialog, ui.card().classes('w-96 p-6'):
+            ui.label(f'Privacy Consent Required - {provider.title()}').classes('text-xl font-bold mb-4')
+            
+            # Data usage notice
+            notice = provider_info.get("data_usage_notice", "")
+            ui.label(notice).classes('text-sm mb-4 text-gray-600')
+            
+            ui.separator()
+            
+            ui.label('By continuing, you consent to:').classes('font-semibold mt-4 mb-2')
+            with ui.column().classes('ml-4'):
+                ui.label('• Sending your questions to external servers').classes('text-sm')
+                ui.label('• Sending document context for better answers').classes('text-sm')
+                ui.label('• Data processing according to provider\'s privacy policy').classes('text-sm')
+            
+            ui.separator().classes('my-4')
+            
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button(
+                    'Decline',
+                    color='negative',
+                    on_click=lambda: self._handle_consent_response(dialog, provider, False)
+                ).classes('flex-1')
+                ui.button(
+                    'Accept and Continue',
+                    color='positive',
+                    on_click=lambda: self._handle_consent_response(dialog, provider, True)
+                ).classes('flex-1')
+        
+        dialog.open()
+        return dialog
+    
+    async def _handle_consent_response(self, dialog, provider: str, consent_granted: bool):
+        """Handle user consent response."""
+        try:
+            if consent_granted:
+                # Grant consent via API
+                response = await self.api_client.post("api/consent", {
+                    "provider": provider,
+                    "consent_granted": True
+                })
+                
+                if response and response.get("success"):
+                    ui.notify(f"Consent granted for {provider}. You can now use external LLM services.", type="positive")
+                    # Refresh provider settings
+                    await self._refresh_provider_settings()
+                else:
+                    ui.notify("Failed to save consent preferences.", type="negative")
+            else:
+                # Deny consent
+                await self.api_client.post("api/consent", {
+                    "provider": provider,
+                    "consent_granted": False
+                })
+                ui.notify(f"Consent declined. {provider} will not be available.", type="info")
+        
+        except Exception as e:
+            logger.error("Failed to handle consent response", error=str(e))
+            ui.notify("Failed to save consent preferences.", type="negative")
+        
+        dialog.close()
+    
+    async def _refresh_provider_settings(self):
+        """Refresh provider settings display after consent changes."""
+        try:
+            # Get updated provider information
+            response = await self.api_client.get("api/providers")
+            if response and response.get("success"):
+                # Update provider selector options
+                providers = response.get("providers", {})
+                available_providers = {}
+                
+                for provider_key, provider_info in providers.items():
+                    provider_name = provider_key.split('_')[0]
+                    consent_info = provider_info.get("consent", {})
+                    
+                    # Only show providers that don't require consent or have consent granted
+                    if not consent_info.get("requires_consent") or consent_info.get("consent_granted"):
+                        display_name = f"{provider_name.title()} ({provider_info.get('model', 'Unknown')})"
+                        available_providers[provider_key] = display_name
+                
+                # Update the selector
+                if hasattr(self, 'provider_select'):
+                    self.provider_select.options = available_providers
+                    if not self.provider_select.value or self.provider_select.value not in available_providers:
+                        # Set to first available provider
+                        if available_providers:
+                            self.provider_select.value = list(available_providers.keys())[0]
+        
+        except Exception as e:
+            logger.error("Failed to refresh provider settings", error=str(e))
+    
+    async def _test_provider_with_consent(self, provider_type: str, generation_model: str, api_key: str = None):
+        """Test provider with consent checking."""
+        try:
+            # First check if provider requires consent
+            if provider_type.lower() != "ollama":
+                consent_response = await self.api_client.get(f"api/consent/{provider_type.lower()}")
+                
+                if (consent_response and 
+                    consent_response.get("requires_consent") and 
+                    not consent_response.get("consent_granted")):
+                    
+                    # Show consent dialog
+                    await self._show_consent_dialog(provider_type.lower(), consent_response)
+                    return {"success": False, "message": "Consent required - please respond to the dialog"}
+            
+            # Test provider connectivity
+            test_data = {
+                "provider_type": provider_type,
+                "generation_model": generation_model,
+                "test_only": True
+            }
+            
+            if api_key:
+                test_data["api_key"] = api_key
+            
+            response = await self.api_client.post("api/providers/register", test_data)
+            return response
+            
+        except Exception as e:
+            logger.error("Provider test failed", error=str(e))
+            return {"success": False, "message": f"Test failed: {str(e)}"}
 
 
 async def create_app():

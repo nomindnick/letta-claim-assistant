@@ -24,6 +24,8 @@ from .rag import RAGEngine
 from .llm.provider_manager import provider_manager
 from .quality_metrics import QualityThresholds as QualityThresholdsClass
 from .hybrid_retrieval import RetrievalWeights as RetrievalWeightsClass
+from .privacy_consent import consent_manager, ConsentType
+from .settings import settings
 
 logger = get_logger(__name__)
 
@@ -79,6 +81,21 @@ class ModelSettings(BaseModel):
     generation_model: str
     embedding_model: str
     api_key: Optional[str] = None
+
+class ConsentRequest(BaseModel):
+    provider: str
+    consent_granted: bool
+    consent_version: str = "1.0"
+
+class ProviderTestRequest(BaseModel):
+    provider_type: str  # "ollama" or "gemini"
+    generation_model: str
+    embedding_model: Optional[str] = None
+    api_key: Optional[str] = None
+    test_only: bool = False
+
+class ProviderSwitchRequest(BaseModel):
+    provider_key: str
 
 
 # Matter Management Endpoints
@@ -576,6 +593,234 @@ async def test_provider_connectivity(request: ProviderTestRequest):
     """Test provider connectivity without registering."""
     request.test_only = True
     return await update_model_settings(request)
+
+
+# Privacy Consent Endpoints
+@app.get("/api/consent/{provider}")
+async def get_consent_status(provider: str):
+    """Get consent status and requirements for a provider."""
+    try:
+        consent_requirements = consent_manager.get_consent_requirements(provider)
+        return {
+            "success": True,
+            **consent_requirements
+        }
+    except Exception as e:
+        logger.error("Failed to get consent status", provider=provider, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/consent")
+async def update_consent(request: ConsentRequest):
+    """Update consent for a provider."""
+    try:
+        if request.consent_granted:
+            success = consent_manager.grant_consent(
+                ConsentType.EXTERNAL_LLM, 
+                request.provider,
+                request.consent_version
+            )
+            action = "granted"
+        else:
+            success = consent_manager.deny_consent(
+                ConsentType.EXTERNAL_LLM,
+                request.provider
+            )
+            action = "denied"
+        
+        if success:
+            logger.info(
+                f"Consent {action}",
+                provider=request.provider,
+                consent_version=request.consent_version
+            )
+            return {
+                "success": True,
+                "message": f"Consent {action} for {request.provider}",
+                "provider": request.provider,
+                "consent_granted": request.consent_granted
+            }
+        else:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to {action.lower()} consent for {request.provider}"
+            )
+            
+    except Exception as e:
+        logger.error("Failed to update consent", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/consent/{provider}")
+async def revoke_consent(provider: str):
+    """Revoke consent for a provider."""
+    try:
+        success = consent_manager.revoke_consent(ConsentType.EXTERNAL_LLM, provider)
+        
+        if success:
+            # Also remove stored credentials for this provider
+            settings.delete_credential(provider, "api_key")
+            
+            logger.info("Consent revoked", provider=provider)
+            return {
+                "success": True,
+                "message": f"Consent revoked for {provider}",
+                "provider": provider
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to revoke consent for {provider}"
+            )
+            
+    except Exception as e:
+        logger.error("Failed to revoke consent", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Enhanced Provider Management Endpoints
+@app.get("/api/providers")
+async def get_all_providers():
+    """Get all registered providers with metrics and status."""
+    try:
+        providers = provider_manager.list_providers()
+        metrics = provider_manager.get_provider_metrics()
+        config = provider_manager.get_provider_config()
+        
+        # Add consent status for each provider
+        for provider_key in providers:
+            provider_name = provider_key.split('_')[0]  # Extract base name (e.g., 'gemini' from 'gemini_2.0-flash-exp')
+            providers[provider_key]["consent"] = consent_manager.get_consent_requirements(provider_name)
+        
+        return {
+            "success": True,
+            "providers": providers,
+            "metrics": metrics,
+            "config": config
+        }
+        
+    except Exception as e:
+        logger.error("Failed to get providers", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/providers/register")
+async def register_provider(request: ProviderTestRequest):
+    """Register a new provider with consent checking."""
+    try:
+        if request.provider_type.lower() == "gemini":
+            # Store API key securely if provided
+            if request.api_key:
+                settings.store_credential("gemini", "api_key", request.api_key)
+            
+            # Get stored API key if not provided
+            api_key = request.api_key or settings.get_credential("gemini", "api_key")
+            
+            if not api_key:
+                return {
+                    "success": False,
+                    "error": "api_key_required",
+                    "message": "API key required for Gemini provider"
+                }
+            
+            # Register Gemini provider with consent checking
+            result = await provider_manager.register_gemini_provider(
+                api_key=api_key,
+                model=request.generation_model,
+                check_consent=True
+            )
+            
+            return result
+            
+        elif request.provider_type.lower() == "ollama":
+            success = await provider_manager.register_ollama_provider(
+                model=request.generation_model,
+                embedding_model=request.embedding_model or "nomic-embed-text"
+            )
+            
+            if success:
+                return {
+                    "success": True,
+                    "message": "Ollama provider registered successfully"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "registration_failed",
+                    "message": "Failed to register Ollama provider"
+                }
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported provider type: {request.provider_type}"
+            )
+            
+    except Exception as e:
+        logger.error("Failed to register provider", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/providers/switch")
+async def switch_active_provider(request: ProviderSwitchRequest):
+    """Switch the active provider."""
+    try:
+        success = provider_manager.switch_provider(request.provider_key)
+        
+        if success:
+            return {
+                "success": True,
+                "message": f"Switched to provider: {request.provider_key}",
+                "active_provider": request.provider_key
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Provider not found: {request.provider_key}"
+            )
+            
+    except Exception as e:
+        logger.error("Failed to switch provider", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/providers/{provider_key}/metrics")
+async def get_provider_metrics(provider_key: str):
+    """Get detailed metrics for a specific provider."""
+    try:
+        metrics = provider_manager.get_provider_metrics(provider_key)
+        
+        if not metrics:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No metrics found for provider: {provider_key}"
+            )
+        
+        return {
+            "success": True,
+            "provider_key": provider_key,
+            "metrics": metrics
+        }
+        
+    except Exception as e:
+        logger.error("Failed to get provider metrics", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/providers/test-all")
+async def test_all_providers():
+    """Test connectivity for all registered providers."""
+    try:
+        test_results = await provider_manager.test_all_providers()
+        
+        return {
+            "success": True,
+            "test_results": test_results,
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error("Failed to test all providers", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Document Management Endpoints
