@@ -5,6 +5,8 @@ Defines core data structures for Matters, configuration, and API communication
 with proper validation and serialization.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Literal, Union
 from datetime import datetime

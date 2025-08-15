@@ -1,0 +1,31 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Letta Claim Assistant
+GenericName=Construction Claim Analyzer
+Comment=AI-powered construction claim analysis and document review
+Icon=/home/nick/Projects/letta-claim-assistant/desktop/icon.png
+Exec=/home/nick/Projects/letta-claim-assistant/scripts/launcher.sh
+Terminal=false
+StartupNotify=true
+Categories=Office;Finance;Engineering;
+Keywords=construction;claims;legal;AI;analysis;documents;contracts;specifications;
+MimeType=application/pdf;
+
+# Actions for different launch modes
+Actions=Debug;Browser;Safe;
+
+[Desktop Action Debug]
+Name=Debug Mode
+Exec=/home/nick/Projects/letta-claim-assistant/scripts/launcher.sh debug
+Icon=/home/nick/Projects/letta-claim-assistant/desktop/icon.png
+
+[Desktop Action Browser]
+Name=Browser Mode
+Exec=/home/nick/Projects/letta-claim-assistant/scripts/launcher.sh browser
+Icon=/home/nick/Projects/letta-claim-assistant/desktop/icon.png
+
+[Desktop Action Safe]
+Name=Safe Mode
+Exec=/home/nick/Projects/letta-claim-assistant/scripts/launcher.sh safe
+Icon=/home/nick/Projects/letta-claim-assistant/desktop/icon.png

@@ -18,7 +18,7 @@ import traceback
 from .models import (
     CreateMatterRequest, CreateMatterResponse, MatterSummary,
     ChatRequest, ChatResponse, JobStatus, DocumentInfo,
-    QualityInsights, RetrievalWeights, QualityThresholds
+    QualityInsights, RetrievalWeights
 )
 from .logging_conf import get_logger
 from .matters import matter_manager
@@ -35,6 +35,9 @@ from .error_handler import (
 )
 from .resource_monitor import resource_monitor
 from .degradation import degradation_manager
+from .monitoring import get_health_status, get_metrics_summary, get_recent_metrics, start_monitoring
+from .startup_checks import validate_startup, format_check_results
+from .production_config import validate_production_config, get_environment_mode, is_production_environment
 
 logger = get_logger(__name__)
 
@@ -157,8 +160,15 @@ async def error_context_middleware(request: Request, call_next):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup."""
-    logger.info("Starting Letta Claim Assistant API")
+    logger.info("Starting Letta Claim Assistant API", environment=get_environment_mode().value)
+    
+    # Start job queue
     await ensure_job_queue_started()
+    
+    # Start monitoring if in production
+    if is_production_environment():
+        await start_monitoring(interval_seconds=30)
+        logger.info("Production monitoring started")
 
 
 # Health and monitoring endpoints
@@ -166,34 +176,166 @@ async def startup_event():
 async def health_check():
     """Get application health status."""
     try:
-        # Get comprehensive system status
-        system_status = await resource_monitor.get_comprehensive_status()
+        # Get comprehensive health status from new monitoring system
+        health_status = await get_health_status()
         
-        # Get degradation status
-        degradation_status = degradation_manager.get_degradation_status()
-        
-        # Get error statistics
-        from .error_handler import error_handler
-        error_stats = error_handler.get_error_stats()
-        
-        return {
-            "status": "healthy" if system_status["overall_status"] == "healthy" else "degraded",
-            "timestamp": system_status["timestamp"],
-            "system": system_status,
-            "degradation": degradation_status,
-            "errors": error_stats,
-            "version": "0.1.0"
-        }
+        # Add legacy system status for backwards compatibility
+        try:
+            system_status = await resource_monitor.get_comprehensive_status()
+            degradation_status = degradation_manager.get_degradation_status()
+            
+            from .error_handler import error_handler
+            error_stats = error_handler.get_error_stats()
+            
+            # Combine new and legacy status
+            response = health_status.to_dict()
+            response.update({
+                "legacy_system": system_status,
+                "degradation": degradation_status,
+                "errors": error_stats,
+                "environment": get_environment_mode().value
+            })
+            
+            return response
+            
+        except Exception as legacy_error:
+            # If legacy monitoring fails, return new monitoring data only
+            logger.warning("Legacy monitoring failed", error=str(legacy_error))
+            response = health_status.to_dict()
+            response["environment"] = get_environment_mode().value
+            return response
+            
     except Exception as e:
-        # Even health check can fail
+        # Health check failure
+        logger.error("Health check completely failed", error=str(e))
+        
         app_error = handle_error(e, create_context(operation="health_check"), notify_user=False)
         return JSONResponse(
             status_code=503,
             content={
                 "status": "unhealthy",
                 "error": app_error.to_dict(),
+                "timestamp": time.time(),
+                "environment": get_environment_mode().value
+            }
+        )
+
+
+@app.get("/api/health/detailed")
+async def detailed_health_check():
+    """Get detailed health and system information."""
+    try:
+        # Run startup validation checks
+        startup_success, startup_results = await validate_startup()
+        
+        # Run production config validation
+        config_success, config_results = validate_production_config()
+        
+        # Get health status
+        health_status = await get_health_status()
+        
+        # Get metrics summary
+        metrics_summary = get_metrics_summary()
+        
+        return {
+            "status": "healthy" if startup_success and config_success and health_status.status == "healthy" else "unhealthy",
+            "timestamp": time.time(),
+            "environment": get_environment_mode().value,
+            "startup_validation": {
+                "success": startup_success,
+                "results": [r.__dict__ for r in startup_results]
+            },
+            "config_validation": {
+                "success": config_success,
+                "results": [r.__dict__ for r in config_results]
+            },
+            "health": health_status.to_dict(),
+            "metrics": metrics_summary
+        }
+        
+    except Exception as e:
+        app_error = handle_error(e, create_context(operation="detailed_health_check"), notify_user=False)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": app_error.to_dict(),
                 "timestamp": time.time()
             }
+        )
+
+
+@app.get("/api/metrics")
+async def get_application_metrics():
+    """Get application performance metrics."""
+    try:
+        return {
+            "summary": get_metrics_summary(),
+            "recent": get_recent_metrics(minutes=5),
+            "timestamp": time.time()
+        }
+    except Exception as e:
+        app_error = handle_error(e, create_context(operation="get_metrics"), notify_user=False)
+        return JSONResponse(
+            status_code=500,
+            content=app_error.to_dict()
+        )
+
+
+@app.get("/api/metrics/recent")
+async def get_recent_application_metrics(minutes: int = 5):
+    """Get recent application metrics."""
+    if minutes < 1 or minutes > 60:
+        raise HTTPException(status_code=400, detail="Minutes must be between 1 and 60")
+    
+    try:
+        return {
+            "metrics": get_recent_metrics(minutes=minutes),
+            "time_window_minutes": minutes,
+            "timestamp": time.time()
+        }
+    except Exception as e:
+        app_error = handle_error(e, create_context(operation="get_recent_metrics"), notify_user=False)
+        return JSONResponse(
+            status_code=500,
+            content=app_error.to_dict()
+        )
+
+
+@app.get("/api/system/validation")
+async def system_validation():
+    """Run system validation checks."""
+    try:
+        # Run startup validation
+        startup_success, startup_results = await validate_startup()
+        
+        # Run production config validation  
+        config_success, config_results = validate_production_config()
+        
+        # Format results for display
+        startup_formatted = format_check_results(startup_results)
+        
+        overall_success = startup_success and config_success
+        
+        return {
+            "success": overall_success,
+            "timestamp": time.time(),
+            "startup_validation": {
+                "success": startup_success,
+                "results": [r.__dict__ for r in startup_results],
+                "formatted": startup_formatted
+            },
+            "config_validation": {
+                "success": config_success,
+                "results": [r.__dict__ for r in config_results]
+            }
+        }
+        
+    except Exception as e:
+        app_error = handle_error(e, create_context(operation="system_validation"), notify_user=False)
+        return JSONResponse(
+            status_code=500,
+            content=app_error.to_dict()
         )
 
 

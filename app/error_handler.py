@@ -256,6 +256,24 @@ class FileProcessingError(BaseApplicationError):
         )
 
 
+class StartupError(BaseApplicationError):
+    """Startup validation and initialization errors."""
+    
+    def __init__(self, check_name: str, issue: str, **kwargs):
+        self.check_name = check_name
+        self.issue = issue
+        message = f"Startup check failed ({check_name}): {issue}"
+        user_message = f"System check failed: {issue}"
+        kwargs.setdefault('severity', ErrorSeverity.ERROR)
+        kwargs.setdefault('recovery_strategy', RecoveryStrategy.MANUAL)
+        kwargs.setdefault('error_code', f'STARTUP_{check_name.upper()}')
+        super().__init__(
+            message=message,
+            user_message=user_message,
+            **kwargs
+        )
+
+
 class ErrorHandler:
     """
     Centralized error handler for the application.
