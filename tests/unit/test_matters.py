@@ -30,10 +30,14 @@ def temp_data_root():
 @pytest.fixture
 def matter_manager(temp_data_root):
     """Create MatterManager with temporary data root."""
-    with patch.object(settings, 'global_config') as mock_config:
-        mock_config.data_root = temp_data_root
-        mock_config.embeddings_model = "test-embed-model"
-        mock_config.llm_model = "test-llm-model"
+    # Create a mock config object
+    mock_config = MagicMock()
+    mock_config.data_root = temp_data_root
+    mock_config.embeddings_model = "test-embed-model"
+    mock_config.llm_model = "test-llm-model"
+    
+    # Mock the global_config property
+    with patch.object(type(settings), 'global_config', new_callable=lambda: property(lambda self: mock_config)):
         return MatterManager()
 
 
@@ -42,8 +46,10 @@ class TestMatterManager:
     
     def test_init_creates_data_root(self, temp_data_root):
         """Test that MatterManager creates data root directory."""
-        with patch.object(settings, 'global_config') as mock_config:
-            mock_config.data_root = temp_data_root / "test_root"
+        mock_config = MagicMock()
+        mock_config.data_root = temp_data_root / "test_root"
+        
+        with patch.object(type(settings), 'global_config', new_callable=lambda: property(lambda self: mock_config)):
             manager = MatterManager()
             assert (temp_data_root / "test_root").exists()
             assert manager.data_root == temp_data_root / "test_root"

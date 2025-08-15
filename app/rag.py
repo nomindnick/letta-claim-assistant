@@ -14,7 +14,7 @@ import time
 from .logging_conf import get_logger
 from .vectors import VectorStore, SearchResult
 from .matters import Matter
-from .models import KnowledgeItem
+from .models import KnowledgeItem, SourceChunk
 from .llm.ollama_provider import OllamaProvider
 from .llm.base import LLMProvider
 from .prompts import (
@@ -33,15 +33,6 @@ from .quality_metrics import QualityAnalyzer, ResponseQualityMetrics, QualityThr
 
 logger = get_logger(__name__)
 
-
-@dataclass
-class SourceChunk:
-    """Source chunk for UI display with citation information."""
-    doc: str
-    page_start: int
-    page_end: int
-    text: str
-    score: float
 
 
 

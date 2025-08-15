@@ -12,7 +12,7 @@ from difflib import SequenceMatcher
 
 from .logging_conf import get_logger
 from .vectors import SearchResult
-from .rag import SourceChunk
+from .models import SourceChunk
 
 logger = get_logger(__name__)
 
