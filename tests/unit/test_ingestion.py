@@ -112,20 +112,23 @@ class TestOCRProcessor:
     
     def test_parse_ocr_error(self, ocr_processor):
         """Test OCR error message parsing."""
+        from pathlib import Path
+        test_file = Path("/tmp/test.pdf")
+        
         # Test encrypted file error
         stderr = "ERROR: PDF is encrypted"
-        error_msg = ocr_processor._parse_ocr_error(stderr)
-        assert "encrypted" in error_msg.lower()
+        error = ocr_processor._parse_ocr_error(stderr, test_file)
+        assert "encrypted" in error.reason.lower()
         
         # Test corrupted file error
         stderr = "ERROR: PDF appears to be corrupted"
-        error_msg = ocr_processor._parse_ocr_error(stderr)
-        assert "corrupted" in error_msg.lower()
+        error = ocr_processor._parse_ocr_error(stderr, test_file)
+        assert "corrupted" in error.reason.lower()
         
         # Test generic error
         stderr = "ERROR: Something went wrong"
-        error_msg = ocr_processor._parse_ocr_error(stderr)
-        assert "Something went wrong" in error_msg
+        error = ocr_processor._parse_ocr_error(stderr, test_file)
+        assert "Something went wrong" in error.reason
 
 
 class TestPDFParser:

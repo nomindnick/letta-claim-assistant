@@ -16,6 +16,15 @@ from .models import Matter
 logger = get_logger(__name__)
 
 
+class ChatHistoryError(Exception):
+    """Raised when chat history operations fail."""
+    
+    def __init__(self, message: str, recoverable: bool = True):
+        self.message = message
+        self.recoverable = recoverable
+        super().__init__(message)
+
+
 class ChatMessage:
     """Chat message with metadata for storage."""
     

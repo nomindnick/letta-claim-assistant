@@ -37,6 +37,24 @@ class OCRResult:
     processing_time_seconds: float = 0.0
 
 
+class OCRError(Exception):
+    """Base class for OCR processing errors."""
+    
+    def __init__(self, message: str, recoverable: bool = True):
+        self.message = message
+        self.recoverable = recoverable
+        super().__init__(message)
+
+
+class OCRTimeoutError(OCRError):
+    """Raised when OCR processing times out."""
+    
+    def __init__(self, timeout_seconds: int):
+        message = f"OCR processing timed out after {timeout_seconds} seconds"
+        super().__init__(message, recoverable=True)
+        self.timeout_seconds = timeout_seconds
+
+
 # Legacy exception for backward compatibility
 class PDFProcessingError(FileProcessingError):
     """Legacy PDF processing error - use FileProcessingError instead."""

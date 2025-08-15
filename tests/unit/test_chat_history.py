@@ -47,7 +47,7 @@ class TestChatHistoryManager:
     @pytest.fixture
     def chat_manager(self, test_matter):
         """Create ChatHistoryManager instance."""
-        return ChatHistoryManager(test_matter.paths.chat)
+        return ChatHistoryManager(test_matter)
     
     @pytest.fixture
     def sample_messages(self):
