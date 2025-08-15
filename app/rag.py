@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import asyncio
 import re
+import time
 
 from .logging_conf import get_logger
 from .vectors import VectorStore, SearchResult
@@ -24,6 +25,11 @@ from .prompts import (
     INFORMATION_EXTRACTION_PROMPT,
     FOLLOWUP_SUGGESTIONS_PROMPT
 )
+# Advanced RAG features
+from .citation_manager import CitationManager, CitationMapping, CitationMetrics
+from .followup_engine import FollowupEngine, FollowupContext
+from .hybrid_retrieval import HybridRetrieval, HybridRetrievalContext, create_retrieval_context, EnhancedSearchResult
+from .quality_metrics import QualityAnalyzer, ResponseQualityMetrics, QualityThresholds
 
 logger = get_logger(__name__)
 
@@ -41,11 +47,22 @@ class SourceChunk:
 
 @dataclass
 class RAGResponse:
-    """Complete response from RAG pipeline."""
+    """Enhanced response from RAG pipeline with quality metrics."""
     answer: str
     sources: List[SourceChunk]
     followups: List[str]
     used_memory: List[KnowledgeItem]
+    
+    # Advanced features
+    citation_mappings: List[CitationMapping] = None
+    citation_metrics: CitationMetrics = None
+    quality_metrics: ResponseQualityMetrics = None
+    processing_time: float = None
+    
+    # Quality indicators for UI
+    confidence_score: float = 0.0
+    quality_warnings: List[str] = None
+    improvement_suggestions: List[str] = None
 
 
 class RAGEngine:
@@ -55,9 +72,12 @@ class RAGEngine:
         self, 
         matter: Matter, 
         llm_provider: Optional[LLMProvider] = None,
-        vector_store: Optional[VectorStore] = None
+        vector_store: Optional[VectorStore] = None,
+        quality_thresholds: Optional[QualityThresholds] = None,
+        enable_advanced_features: bool = True
     ):
         self.matter = matter
+        self.enable_advanced_features = enable_advanced_features
         
         # Initialize vector store for the matter
         if vector_store is None:
@@ -83,12 +103,25 @@ class RAGEngine:
             logger.warning("Failed to initialize Letta adapter", error=str(e))
             self.letta_adapter = None
         
+        # Initialize advanced features if enabled
+        if self.enable_advanced_features:
+            self.citation_manager = CitationManager()
+            self.followup_engine = FollowupEngine(self.llm_provider)
+            self.hybrid_retrieval = HybridRetrieval(self.vector_store)
+            self.quality_analyzer = QualityAnalyzer(quality_thresholds)
+        else:
+            self.citation_manager = None
+            self.followup_engine = None
+            self.hybrid_retrieval = None
+            self.quality_analyzer = None
+        
         logger.info(
             "RAG engine initialized",
             matter_id=matter.id,
             matter_name=matter.name,
             generation_model=matter.generation_model,
-            embedding_model=matter.embedding_model
+            embedding_model=matter.embedding_model,
+            advanced_features_enabled=self.enable_advanced_features
         )
     
     async def generate_answer(
@@ -97,7 +130,10 @@ class RAGEngine:
         k: int = 8,
         k_memory: int = 6,
         max_tokens: int = 900,
-        temperature: float = 0.2
+        temperature: float = 0.2,
+        conversation_history: Optional[List[str]] = None,
+        recent_documents: Optional[List[str]] = None,
+        enable_mmr: bool = True
     ) -> RAGResponse:
         """
         Generate answer using RAG pipeline.
@@ -123,26 +159,74 @@ class RAGEngine:
             k_memory=k_memory
         )
         
+        start_time = time.time()
+        
         try:
-            # Step 1: Vector retrieval
-            logger.debug("Performing vector search")
-            search_results = await self.vector_store.search(query, k=k)
+            # Step 1: Enhanced retrieval using hybrid system or fallback to basic vector search
+            if self.enable_advanced_features and self.hybrid_retrieval:
+                logger.debug("Performing hybrid retrieval")
+                retrieval_context = create_retrieval_context(
+                    query=query,
+                    matter_id=self.matter.id,
+                    conversation_history=conversation_history or [],
+                    recent_documents=recent_documents or []
+                )
+                
+                # Get memory items first for hybrid retrieval
+                memory_items = []
+                if self.letta_adapter:
+                    try:
+                        memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
+                        logger.debug("Agent memory recall completed", memory_items=len(memory_items))
+                    except Exception as e:
+                        logger.warning("Agent memory recall failed", error=str(e))
+                        memory_items = []
+                
+                enhanced_results = await self.hybrid_retrieval.hybrid_search(
+                    retrieval_context, memory_items, k=k, enable_mmr=enable_mmr
+                )
+                
+                # Convert enhanced results back to standard format for compatibility
+                search_results = []
+                for enhanced in enhanced_results:
+                    result = SearchResult(
+                        chunk_id=enhanced.chunk_id,
+                        doc_name=enhanced.doc_name,
+                        page_start=enhanced.page_start,
+                        page_end=enhanced.page_end,
+                        text=enhanced.text,
+                        similarity_score=enhanced.final_score,
+                        metadata={}
+                    )
+                    search_results.append(result)
+                
+                logger.debug(
+                    "Hybrid retrieval completed",
+                    results_found=len(search_results),
+                    avg_score=sum(r.similarity_score for r in search_results) / len(search_results) if search_results else 0
+                )
+            else:
+                # Fallback to basic vector search
+                logger.debug("Performing basic vector search")
+                search_results = await self.vector_store.search(query, k=k)
+                
+                logger.debug(
+                    "Vector search completed",
+                    results_found=len(search_results),
+                    avg_similarity=sum(r.similarity_score for r in search_results) / len(search_results) if search_results else 0
+                )
+                
+                # Get memory items for basic retrieval
+                memory_items = []
+                if self.letta_adapter:
+                    try:
+                        memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
+                        logger.debug("Agent memory recall completed", memory_items=len(memory_items))
+                    except Exception as e:
+                        logger.warning("Agent memory recall failed", error=str(e))
+                        memory_items = []
             
-            logger.debug(
-                "Vector search completed",
-                results_found=len(search_results),
-                avg_similarity=sum(r.similarity_score for r in search_results) / len(search_results) if search_results else 0
-            )
-            
-            # Step 2: Memory recall from Letta agent
-            memory_items = []
-            if self.letta_adapter:
-                try:
-                    memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
-                    logger.debug("Agent memory recall completed", memory_items=len(memory_items))
-                except Exception as e:
-                    logger.warning("Agent memory recall failed", error=str(e))
-                    memory_items = []
+            # Memory items are now retrieved in Step 1 for both hybrid and basic modes
             
             # Step 3: Assemble prompt
             logger.debug("Assembling RAG prompt")
@@ -166,30 +250,66 @@ class RAGEngine:
                 matter_id=self.matter.id
             )
             
-            # Step 5: Extract and validate citations
+            # Step 5: Advanced citation analysis and validation
             citations = extract_citations_from_answer(answer)
-            citation_validity = validate_citations(citations, search_results)
-            
-            # Log citation validation results
-            valid_citations = sum(1 for valid in citation_validity.values() if valid)
-            if citations:
-                logger.debug(
-                    "Citation validation completed",
-                    total_citations=len(citations),
-                    valid_citations=valid_citations,
-                    validity_rate=valid_citations / len(citations)
-                )
-            
-            # Step 6: Convert search results to source chunks
             sources = self._format_sources(search_results)
             
-            # Step 7: Generate follow-up suggestions
-            followups = await self._generate_followups(query, answer, memory_items)
+            citation_mappings = []
+            citation_metrics = None
             
-            # Step 8: Extract knowledge items for future Letta integration
+            if self.enable_advanced_features and self.citation_manager:
+                # Enhanced citation analysis
+                citation_mappings = self.citation_manager.create_citation_mappings(citations, sources)
+                citation_metrics = self.citation_manager.calculate_citation_metrics(
+                    answer, citation_mappings, sources
+                )
+                
+                logger.debug(
+                    "Advanced citation analysis completed",
+                    total_citations=citation_metrics.total_citations,
+                    valid_citations=citation_metrics.valid_citations,
+                    accuracy_score=citation_metrics.accuracy_score,
+                    coverage_score=citation_metrics.coverage_score
+                )
+            else:
+                # Fallback to basic citation validation
+                citation_validity = validate_citations(citations, search_results)
+                valid_citations = sum(1 for valid in citation_validity.values() if valid)
+                if citations:
+                    logger.debug(
+                        "Basic citation validation completed",
+                        total_citations=len(citations),
+                        valid_citations=valid_citations,
+                        validity_rate=valid_citations / len(citations)
+                    )
+            
+            # Step 6: Enhanced follow-up generation
+            if self.enable_advanced_features and self.followup_engine:
+                followup_context = FollowupContext(
+                    user_query=query,
+                    assistant_answer=answer,
+                    memory_items=memory_items,
+                    conversation_history=conversation_history or [],
+                    matter_context={'matter_id': self.matter.id, 'matter_name': self.matter.name}
+                )
+                
+                followup_suggestions = await self.followup_engine.generate_followups(followup_context)
+                followups = [suggestion.question for suggestion in followup_suggestions]
+                
+                logger.debug(
+                    "Advanced follow-up generation completed",
+                    suggestions_count=len(followups),
+                    avg_priority=sum(s.priority for s in followup_suggestions) / len(followup_suggestions) if followup_suggestions else 0
+                )
+            else:
+                # Fallback to basic follow-up generation
+                followups = await self._generate_followups(query, answer, memory_items)
+                logger.debug("Basic follow-up generation completed", suggestions_count=len(followups))
+            
+            # Step 7: Extract knowledge items for future Letta integration
             extracted_facts = await self._extract_knowledge_items(answer, search_results)
             
-            # Step 9: Update Letta memory with interaction and extracted facts
+            # Step 8: Update Letta memory with interaction and extracted facts
             if self.letta_adapter:
                 try:
                     await self.letta_adapter.upsert_interaction(
@@ -199,11 +319,48 @@ class RAGEngine:
                 except Exception as e:
                     logger.warning("Failed to update agent memory", error=str(e))
             
+            # Step 9: Quality analysis and metrics
+            processing_time = time.time() - start_time
+            quality_metrics = None
+            quality_warnings = []
+            improvement_suggestions = []
+            
+            if self.enable_advanced_features and self.quality_analyzer:
+                quality_metrics = self.quality_analyzer.analyze_response_quality(
+                    user_query=query,
+                    assistant_answer=answer,
+                    source_chunks=sources,
+                    citation_mappings=citation_mappings or [],
+                    citation_metrics=citation_metrics or CitationMetrics(0, 0, 0.0, 0.0, 0.0, 0.0),
+                    followup_suggestions=followup_suggestions if self.followup_engine else [],
+                    memory_items=memory_items,
+                    processing_time=processing_time,
+                    matter_id=self.matter.id
+                )
+                
+                quality_warnings = quality_metrics.quality_warnings
+                improvement_suggestions = self.quality_analyzer.suggest_quality_improvements(quality_metrics)
+                
+                logger.debug(
+                    "Quality analysis completed",
+                    overall_quality=quality_metrics.overall_quality,
+                    confidence_score=quality_metrics.confidence_score,
+                    meets_standards=quality_metrics.meets_minimum_standards,
+                    warnings_count=len(quality_warnings)
+                )
+            
             response = RAGResponse(
                 answer=answer,
                 sources=sources,
                 followups=followups,
-                used_memory=memory_items
+                used_memory=memory_items,
+                citation_mappings=citation_mappings,
+                citation_metrics=citation_metrics,
+                quality_metrics=quality_metrics,
+                processing_time=processing_time,
+                confidence_score=quality_metrics.confidence_score if quality_metrics else 0.5,
+                quality_warnings=quality_warnings,
+                improvement_suggestions=improvement_suggestions
             )
             
             logger.info(
@@ -212,8 +369,10 @@ class RAGEngine:
                 answer_length=len(answer),
                 sources_count=len(sources),
                 followups_count=len(followups),
-                valid_citations=valid_citations,
-                total_citations=len(citations)
+                processing_time_seconds=processing_time,
+                quality_score=quality_metrics.overall_quality if quality_metrics else None,
+                confidence_score=quality_metrics.confidence_score if quality_metrics else None,
+                meets_quality_standards=quality_metrics.meets_minimum_standards if quality_metrics else None
             )
             
             return response
@@ -300,6 +459,17 @@ class RAGEngine:
                 "Should we engage technical experts for further analysis?"
             ]
     
+    def get_advanced_features_status(self) -> Dict[str, bool]:
+        """Get status of all advanced features."""
+        return {
+            'advanced_features_enabled': self.enable_advanced_features,
+            'citation_manager_available': self.citation_manager is not None,
+            'followup_engine_available': self.followup_engine is not None,
+            'hybrid_retrieval_available': self.hybrid_retrieval is not None,
+            'quality_analyzer_available': self.quality_analyzer is not None,
+            'letta_adapter_available': self.letta_adapter is not None
+        }
+    
     async def _extract_knowledge_items(self, answer: str, sources: List[SearchResult]) -> List[KnowledgeItem]:
         """Extract structured knowledge items for agent memory."""
         try:
@@ -363,3 +533,128 @@ class RAGEngine:
         except Exception as e:
             logger.warning("Knowledge extraction failed", error=str(e))
             return []
+    
+    def get_quality_insights(self, matter_id: str = None) -> Dict[str, Any]:
+        """Get quality insights and statistics for the matter."""
+        if not self.enable_advanced_features or not self.quality_analyzer:
+            return {'message': 'Advanced features not enabled'}
+        
+        insights = {
+            'matter_id': matter_id or self.matter.id,
+            'advanced_features_enabled': True
+        }
+        
+        # Get historical quality stats
+        if matter_id or self.matter.id:
+            historical_stats = self.quality_analyzer.get_historical_stats(matter_id or self.matter.id)
+            if historical_stats:
+                insights['historical_stats'] = {
+                    'total_responses': historical_stats.total_responses,
+                    'average_quality': historical_stats.average_quality,
+                    'quality_trend': historical_stats.quality_trend,
+                    'best_quality_score': historical_stats.best_quality_score,
+                    'worst_quality_score': historical_stats.worst_quality_score,
+                    'quality_consistency': historical_stats.quality_consistency,
+                    'citation_quality_avg': historical_stats.citation_quality_avg,
+                    'content_quality_avg': historical_stats.content_quality_avg,
+                    'source_quality_avg': historical_stats.source_quality_avg,
+                    'followup_quality_avg': historical_stats.followup_quality_avg
+                }
+            else:
+                insights['historical_stats'] = {'message': 'No historical data available'}
+        
+        # Get retrieval system stats
+        if self.hybrid_retrieval:
+            insights['retrieval_stats'] = self.hybrid_retrieval.get_retrieval_stats()
+        
+        # Get quality thresholds
+        insights['quality_thresholds'] = {
+            'minimum_citation_coverage': self.quality_analyzer.thresholds.minimum_citation_coverage,
+            'minimum_source_diversity': self.quality_analyzer.thresholds.minimum_source_diversity,
+            'minimum_answer_completeness': self.quality_analyzer.thresholds.minimum_answer_completeness,
+            'minimum_confidence_score': self.quality_analyzer.thresholds.minimum_confidence_score
+        }
+        
+        return insights
+    
+    def update_quality_thresholds(self, new_thresholds: QualityThresholds):
+        """Update quality thresholds for response validation."""
+        if self.enable_advanced_features and self.quality_analyzer:
+            self.quality_analyzer.thresholds = new_thresholds
+            logger.info("Quality thresholds updated", thresholds=new_thresholds)
+        else:
+            logger.warning("Cannot update quality thresholds - advanced features not enabled")
+    
+    def regenerate_if_needed(self, response: RAGResponse, max_attempts: int = 2) -> bool:
+        """Check if response needs regeneration based on quality metrics."""
+        if not self.enable_advanced_features or not response.quality_metrics:
+            return False
+        
+        return response.quality_metrics.requires_regeneration and max_attempts > 0
+    
+    async def generate_answer_with_quality_retry(
+        self,
+        query: str,
+        k: int = 8,
+        k_memory: int = 6,
+        max_tokens: int = 900,
+        temperature: float = 0.2,
+        conversation_history: Optional[List[str]] = None,
+        recent_documents: Optional[List[str]] = None,
+        enable_mmr: bool = True,
+        max_retry_attempts: int = 1
+    ) -> RAGResponse:
+        """Generate answer with automatic quality-based retry."""
+        
+        attempt = 0
+        best_response = None
+        best_quality = -1.0
+        
+        while attempt <= max_retry_attempts:
+            try:
+                response = await self.generate_answer(
+                    query=query,
+                    k=k,
+                    k_memory=k_memory,
+                    max_tokens=max_tokens,
+                    temperature=temperature + (attempt * 0.1),  # Slightly increase temp on retry
+                    conversation_history=conversation_history,
+                    recent_documents=recent_documents,
+                    enable_mmr=enable_mmr
+                )
+                
+                # Track best response
+                current_quality = response.quality_metrics.overall_quality if response.quality_metrics else 0.5
+                if current_quality > best_quality:
+                    best_quality = current_quality
+                    best_response = response
+                
+                # Check if quality is acceptable or if this is the last attempt
+                if (not self.regenerate_if_needed(response, max_retry_attempts - attempt) or 
+                    attempt >= max_retry_attempts):
+                    
+                    logger.info(
+                        "Answer generation completed",
+                        attempt=attempt + 1,
+                        final_quality=current_quality,
+                        retry_triggered=attempt > 0
+                    )
+                    return response
+                
+                logger.info(
+                    "Answer quality below threshold, retrying",
+                    attempt=attempt + 1,
+                    quality_score=current_quality,
+                    requires_regeneration=response.quality_metrics.requires_regeneration if response.quality_metrics else False
+                )
+                
+                attempt += 1
+                
+            except Exception as e:
+                logger.error(f"Answer generation attempt {attempt + 1} failed", error=str(e))
+                attempt += 1
+                if attempt > max_retry_attempts:
+                    raise
+        
+        # Return best response if all attempts completed
+        return best_response or response

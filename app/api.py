@@ -14,13 +14,16 @@ import time
 
 from .models import (
     CreateMatterRequest, CreateMatterResponse, MatterSummary,
-    ChatRequest, ChatResponse, JobStatus, DocumentInfo
+    ChatRequest, ChatResponse, JobStatus, DocumentInfo,
+    QualityInsights, RetrievalWeights, QualityThresholds
 )
 from .logging_conf import get_logger
 from .matters import matter_manager
 from .jobs import job_queue, ensure_job_queue_started
 from .rag import RAGEngine
 from .llm.provider_manager import provider_manager
+from .quality_metrics import QualityThresholds as QualityThresholdsClass
+from .hybrid_retrieval import RetrievalWeights as RetrievalWeightsClass
 
 logger = get_logger(__name__)
 
@@ -352,16 +355,18 @@ async def chat(request: ChatRequest):
         # 3. Initialize RAG engine for the matter
         rag_engine = RAGEngine(
             matter=matter,
-            llm_provider=active_provider
+            llm_provider=active_provider,
+            enable_advanced_features=True
         )
         
         # 4. Process query through RAG pipeline
-        rag_response = await rag_engine.generate_answer(
+        rag_response = await rag_engine.generate_answer_with_quality_retry(
             query=request.query,
             k=request.k,
             k_memory=6,  # Default memory items to recall
             max_tokens=request.max_tokens,
-            temperature=0.2  # Conservative temperature for legal analysis
+            temperature=0.2,  # Conservative temperature for legal analysis
+            max_retry_attempts=1  # Allow one retry for quality improvement
         )
         
         # 5. Save interaction to chat history
@@ -384,12 +389,18 @@ async def chat(request: ChatRequest):
             logger.warning("Failed to save chat history", error=str(e))
             # Don't fail the request if history saving fails
         
-        # 6. Convert RAG response to API response format
+        # 6. Convert RAG response to enhanced API response format with quality metrics
         api_response = ChatResponse(
             answer=rag_response.answer,
             sources=rag_response.sources,
             followups=rag_response.followups,
-            used_memory=rag_response.used_memory
+            used_memory=rag_response.used_memory,
+            citation_metrics=rag_response.citation_metrics,
+            quality_metrics=rag_response.quality_metrics,
+            processing_time=rag_response.processing_time,
+            confidence_score=rag_response.confidence_score,
+            quality_warnings=rag_response.quality_warnings or [],
+            improvement_suggestions=rag_response.improvement_suggestions or []
         )
         
         logger.info(
@@ -655,6 +666,80 @@ async def clear_chat_history(matter_id: str):
     except Exception as e:
         logger.error("Failed to clear chat history", error=str(e), matter_id=matter_id)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Quality and Advanced Features Endpoints
+
+@app.get("/api/matters/{matter_id}/quality/insights", response_model=QualityInsights)
+async def get_quality_insights(matter_id: str):
+    """Get quality insights and statistics for a matter."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get active provider
+        active_provider = provider_manager.get_active_provider()
+        if not active_provider:
+            raise HTTPException(
+                status_code=503,
+                detail="No LLM provider available. Please configure a provider in settings."
+            )
+        
+        # Initialize RAG engine with advanced features
+        rag_engine = RAGEngine(
+            matter=matter,
+            llm_provider=active_provider,
+            enable_advanced_features=True
+        )
+        
+        # Get insights
+        insights_data = rag_engine.get_quality_insights(matter_id)
+        
+        return QualityInsights(**insights_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get quality insights: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get quality insights: {str(e)}")
+
+
+@app.get("/api/matters/{matter_id}/advanced-features/status")
+async def get_advanced_features_status(matter_id: str):
+    """Get status of advanced RAG features for a matter."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get active provider
+        active_provider = provider_manager.get_active_provider()
+        if not active_provider:
+            return {
+                "advanced_features_enabled": False,
+                "error": "No LLM provider available"
+            }
+        
+        # Initialize RAG engine with advanced features
+        rag_engine = RAGEngine(
+            matter=matter,
+            llm_provider=active_provider,
+            enable_advanced_features=True
+        )
+        
+        # Get feature status
+        status = rag_engine.get_advanced_features_status()
+        
+        return status
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get advanced features status: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get advanced features status: {str(e)}")
 
 
 # Health check endpoint

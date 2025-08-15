@@ -6,7 +6,7 @@ with proper validation and serialization.
 """
 
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Union
 from datetime import datetime
 import uuid
 from pydantic import BaseModel, Field, field_validator, model_serializer
@@ -137,6 +137,16 @@ class SourceChunk(BaseModel):
                 raise ValueError("page_end must be >= page_start")
         return v
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API compatibility."""
+        return {
+            "doc": self.doc,
+            "page_start": self.page_start,
+            "page_end": self.page_end,
+            "text": self.text,
+            "score": self.score
+        }
+
 
 class KnowledgeItem(BaseModel):
     """Agent knowledge item for Letta integration."""
@@ -170,13 +180,67 @@ class ChatRequest(BaseModel):
     max_tokens: int = Field(default=900, ge=100, le=4000, description="Maximum tokens in response")
 
 
+class CitationMetrics(BaseModel):
+    """Citation quality metrics for API responses."""
+    total_citations: int = Field(..., ge=0, description="Total number of citations")
+    valid_citations: int = Field(..., ge=0, description="Number of valid citations")
+    coverage_score: float = Field(..., ge=0.0, le=1.0, description="Citation coverage score")
+    diversity_score: float = Field(..., ge=0.0, le=1.0, description="Citation diversity score")
+    accuracy_score: float = Field(..., ge=0.0, le=1.0, description="Citation accuracy score")
+    completeness_score: float = Field(..., ge=0.0, le=1.0, description="Citation completeness score")
+
+
+class QualityMetrics(BaseModel):
+    """Response quality metrics for API responses."""
+    citation_coverage: float = Field(..., ge=0.0, le=1.0, description="Citation coverage score")
+    citation_accuracy: float = Field(..., ge=0.0, le=1.0, description="Citation accuracy score")
+    citation_diversity: float = Field(..., ge=0.0, le=1.0, description="Citation diversity score")
+    answer_completeness: float = Field(..., ge=0.0, le=1.0, description="Answer completeness score")
+    content_coherence: float = Field(..., ge=0.0, le=1.0, description="Content coherence score")
+    domain_specificity: float = Field(..., ge=0.0, le=1.0, description="Domain specificity score")
+    source_diversity: float = Field(..., ge=0.0, le=1.0, description="Source diversity score")
+    source_relevance: float = Field(..., ge=0.0, le=1.0, description="Source relevance score")
+    source_recency: float = Field(..., ge=0.0, le=1.0, description="Source recency score")
+    followup_relevance: float = Field(..., ge=0.0, le=1.0, description="Follow-up relevance score")
+    followup_diversity: float = Field(..., ge=0.0, le=1.0, description="Follow-up diversity score")
+    followup_actionability: float = Field(..., ge=0.0, le=1.0, description="Follow-up actionability score")
+    confidence_score: float = Field(..., ge=0.0, le=1.0, description="Overall confidence score")
+    overall_quality: float = Field(..., ge=0.0, le=1.0, description="Overall quality score")
+    response_length: int = Field(..., ge=0, description="Response length in characters")
+    processing_time: Optional[float] = Field(None, ge=0.0, description="Processing time in seconds")
+    meets_minimum_standards: bool = Field(default=False, description="Whether response meets minimum quality standards")
+    requires_regeneration: bool = Field(default=False, description="Whether response should be regenerated")
+    quality_warnings: List[str] = Field(default_factory=list, description="Quality warning messages")
+
+
+class FollowupSuggestion(BaseModel):
+    """Enhanced follow-up suggestion with metadata."""
+    question: str = Field(..., min_length=1, description="Follow-up question text")
+    category: str = Field(..., description="Question category")
+    priority: float = Field(..., ge=0.0, le=1.0, description="Priority score")
+    reasoning: str = Field(..., description="Reasoning for suggestion")
+    related_entities: List[str] = Field(default_factory=list, description="Related entities")
+    requires_expert: bool = Field(default=False, description="Whether expert analysis is needed")
+
+
 class ChatResponse(BaseModel):
-    """Chat response payload."""
+    """Enhanced chat response payload with quality metrics."""
     
     answer: str = Field(..., description="Generated answer")
     sources: List[SourceChunk] = Field(default_factory=list, description="Source chunks used")
     followups: List[str] = Field(default_factory=list, description="Suggested follow-up questions")
     used_memory: List[KnowledgeItem] = Field(default_factory=list, description="Agent memory items used")
+    
+    # Advanced features (optional for backward compatibility)
+    citation_metrics: Optional[CitationMetrics] = Field(None, description="Citation quality metrics")
+    quality_metrics: Optional[QualityMetrics] = Field(None, description="Response quality metrics")
+    processing_time: Optional[float] = Field(None, ge=0.0, description="Processing time in seconds")
+    confidence_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Confidence in response quality")
+    quality_warnings: List[str] = Field(default_factory=list, description="Quality warning messages")
+    improvement_suggestions: List[str] = Field(default_factory=list, description="Suggestions for improvement")
+    
+    # Enhanced follow-up suggestions
+    enhanced_followups: List[FollowupSuggestion] = Field(default_factory=list, description="Enhanced follow-up suggestions")
 
 
 class JobStatus(BaseModel):
@@ -245,3 +309,44 @@ class CreateMatterResponse(BaseModel):
     id: str = Field(..., description="Created matter ID")
     slug: str = Field(..., description="Created matter slug")
     paths: Dict[str, str] = Field(..., description="Matter directory paths")
+
+
+class HistoricalQualityStats(BaseModel):
+    """Historical quality statistics for a matter."""
+    total_responses: int = Field(..., ge=0, description="Total number of responses")
+    average_quality: float = Field(..., ge=0.0, le=1.0, description="Average quality score")
+    quality_trend: float = Field(..., description="Quality trend (positive = improving)")
+    best_quality_score: float = Field(..., ge=0.0, le=1.0, description="Best quality score achieved")
+    worst_quality_score: float = Field(..., ge=0.0, le=1.0, description="Worst quality score")
+    quality_consistency: float = Field(..., ge=0.0, description="Quality consistency (lower = more consistent)")
+    citation_quality_avg: float = Field(..., ge=0.0, le=1.0, description="Average citation quality")
+    content_quality_avg: float = Field(..., ge=0.0, le=1.0, description="Average content quality")
+    source_quality_avg: float = Field(..., ge=0.0, le=1.0, description="Average source quality")
+    followup_quality_avg: float = Field(..., ge=0.0, le=1.0, description="Average follow-up quality")
+    first_response_date: datetime = Field(..., description="Date of first response")
+    last_response_date: datetime = Field(..., description="Date of last response")
+    quality_by_day: Dict[str, float] = Field(default_factory=dict, description="Quality scores by day")
+
+    class Config:
+        """Pydantic configuration."""
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class QualityInsights(BaseModel):
+    """Quality insights response for a matter."""
+    matter_id: str = Field(..., description="Matter ID")
+    advanced_features_enabled: bool = Field(..., description="Whether advanced features are enabled")
+    historical_stats: Optional[HistoricalQualityStats] = Field(None, description="Historical quality statistics")
+    retrieval_stats: Dict[str, Any] = Field(default_factory=dict, description="Retrieval system statistics")
+    quality_thresholds: Dict[str, float] = Field(default_factory=dict, description="Current quality thresholds")
+
+
+class RetrievalWeights(BaseModel):
+    """Configuration for hybrid retrieval scoring."""
+    vector_similarity: float = Field(default=0.7, ge=0.0, le=1.0, description="Vector similarity weight")
+    memory_relevance: float = Field(default=0.3, ge=0.0, le=1.0, description="Memory relevance weight")
+    recency_boost: float = Field(default=0.1, ge=0.0, le=1.0, description="Recency boost weight")
+    diversity_factor: float = Field(default=0.15, ge=0.0, le=1.0, description="Diversity factor weight")
+    temporal_decay_days: int = Field(default=30, ge=1, le=365, description="Temporal decay period in days")
