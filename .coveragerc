@@ -1,0 +1,25 @@
+[run]
+source = app,ui
+omit = 
+    */tests/*
+    */__init__.py
+    */test_*.py
+    */.venv/*
+    */venv/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    pass
+    except ImportError:
+    @abstractmethod
+
+[html]
+directory = htmlcov
+
+[xml]
+output = coverage.xml

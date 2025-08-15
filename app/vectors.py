@@ -13,12 +13,64 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 import hashlib
 import uuid
+import time
+from collections import OrderedDict
 
 from .logging_conf import get_logger
 from .chunking import Chunk
 from .llm.embeddings import embedding_manager
 
 logger = get_logger(__name__)
+
+
+class SearchCache:
+    """LRU cache for search results with TTL."""
+    
+    def __init__(self, max_size: int = 100, ttl_seconds: int = 300):
+        self.max_size = max_size
+        self.ttl_seconds = ttl_seconds
+        self.cache = OrderedDict()
+        self.timestamps = {}
+    
+    def _make_key(self, query: str, k: int, filter_metadata: Optional[Dict] = None) -> str:
+        """Create cache key from search parameters."""
+        filter_str = str(sorted(filter_metadata.items())) if filter_metadata else ""
+        return f"{query}:{k}:{filter_str}"
+    
+    def get(self, query: str, k: int, filter_metadata: Optional[Dict] = None) -> Optional[List]:
+        """Get cached results if valid."""
+        key = self._make_key(query, k, filter_metadata)
+        
+        if key not in self.cache:
+            return None
+        
+        # Check TTL
+        if time.time() - self.timestamps[key] > self.ttl_seconds:
+            del self.cache[key]
+            del self.timestamps[key]
+            return None
+        
+        # Move to end (LRU)
+        self.cache.move_to_end(key)
+        return self.cache[key]
+    
+    def put(self, query: str, k: int, results: List, filter_metadata: Optional[Dict] = None):
+        """Cache search results."""
+        key = self._make_key(query, k, filter_metadata)
+        
+        # Remove oldest if at capacity
+        while len(self.cache) >= self.max_size:
+            oldest_key = next(iter(self.cache))
+            del self.cache[oldest_key]
+            del self.timestamps[oldest_key]
+        
+        self.cache[key] = results
+        self.timestamps[key] = time.time()
+    
+    def clear(self):
+        """Clear all cached results."""
+        self.cache.clear()
+        self.timestamps.clear()
 
 
 @dataclass
@@ -43,12 +95,15 @@ class VectorStoreError(Exception):
 
 
 class VectorStore:
-    """ChromaDB-based vector storage for a specific Matter."""
+    """ChromaDB-based vector storage for a specific Matter with performance optimizations."""
     
     def __init__(self, matter_path: Path, collection_name: Optional[str] = None):
         self.matter_path = matter_path
         self.collection_path = matter_path / "vectors" / "chroma"
         self.collection_path.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize search cache
+        self.search_cache = SearchCache(max_size=100, ttl_seconds=300)  # 5 minute TTL
         
         # Generate collection name from matter path if not provided
         if collection_name is None:
@@ -89,150 +144,152 @@ class VectorStore:
             logger.error(error_msg, matter_path=str(matter_path))
             raise VectorStoreError(error_msg, recoverable=False)
     
-    async def upsert_chunks(self, chunks: List[Chunk]) -> None:
+    async def upsert_chunks(self, chunks: List[Chunk], batch_size: int = 250) -> None:
         """
-        Upsert chunks with their embeddings into the vector store.
+        Upsert chunks with their embeddings into the vector store using optimized batching.
         
         Args:
             chunks: List of Chunk objects to store
+            batch_size: Size of batches for processing (increased from 100 to 250)
         """
         if not chunks:
             logger.debug("No chunks provided for upserting")
             return
         
         logger.info(
-            "Starting chunk upsert",
+            "Starting optimized chunk upsert",
             matter_path=str(self.matter_path),
-            chunk_count=len(chunks)
+            chunk_count=len(chunks),
+            batch_size=batch_size
         )
         
         try:
-            # Prepare data for batch operations
-            chunk_ids = []
-            chunk_texts = []
-            metadatas = []
-            documents = []
-            
-            # Check for existing chunks to avoid duplicates
+            # Check for existing chunks to avoid duplicates (optimized)
             existing_ids = set()
             if self.collection.count() > 0:
                 try:
-                    # Get all existing IDs
-                    existing_data = self.collection.get(include=["metadatas"])
+                    # Get only IDs for faster duplicate checking
+                    existing_data = self.collection.get(include=[])
                     existing_ids = set(existing_data.get("ids", []))
                 except Exception as e:
                     logger.warning("Failed to get existing chunk IDs", error=str(e))
             
-            # Prepare new chunks (skip duplicates by MD5)
+            # Filter out duplicates first
             new_chunks = []
             skipped_count = 0
             
             for chunk in chunks:
-                # Use MD5 as unique ID to prevent content duplicates
                 chunk_vector_id = f"chunk_{chunk.md5}"
-                
-                if chunk_vector_id in existing_ids:
+                if chunk_vector_id not in existing_ids:
+                    new_chunks.append((chunk, chunk_vector_id))
+                else:
                     skipped_count += 1
-                    logger.debug(
-                        "Chunk already exists, skipping",
-                        chunk_id=chunk.chunk_id,
-                        md5=chunk.md5
-                    )
-                    continue
-                
-                chunk_ids.append(chunk_vector_id)
-                chunk_texts.append(chunk.text)
-                documents.append(chunk.text)  # ChromaDB stores full document text separately
-                
-                # Prepare metadata for ChromaDB
-                chunk_metadata = {
-                    "chunk_id": chunk.chunk_id,
-                    "doc_id": chunk.doc_id,
-                    "doc_name": chunk.doc_name,
-                    "page_start": chunk.page_start,
-                    "page_end": chunk.page_end,
-                    "token_count": chunk.token_count,
-                    "char_count": chunk.char_count,
-                    "md5": chunk.md5,
-                    "section_title": chunk.section_title or "",
-                    "chunk_index": chunk.chunk_index,
-                    "has_overlap": chunk.overlap_info.get("has_overlap", False),
-                    "overlap_sentences": chunk.overlap_info.get("overlap_sentences", 0)
-                }
-                
-                # Add custom metadata fields
-                if chunk.metadata:
-                    for key, value in chunk.metadata.items():
-                        # ChromaDB metadata values must be strings, numbers, or bools
-                        if isinstance(value, (str, int, float, bool)):
-                            chunk_metadata[f"meta_{key}"] = value
-                        else:
-                            chunk_metadata[f"meta_{key}"] = str(value)
-                
-                metadatas.append(chunk_metadata)
-                new_chunks.append(chunk)
             
             if not new_chunks:
-                logger.info(
-                    "No new chunks to upsert",
-                    total_provided=len(chunks),
-                    skipped_duplicates=skipped_count
-                )
+                logger.info("All chunks already exist, skipping upsert", skipped_count=skipped_count)
                 return
             
-            # Generate embeddings for new chunks
-            logger.debug("Generating embeddings for chunks", count=len(chunk_texts))
-            embeddings = await embedding_manager.embed(chunk_texts)
+            logger.info(f"Processing {len(new_chunks)} new chunks (skipped {skipped_count} duplicates)")
             
-            if len(embeddings) != len(chunk_texts):
-                raise VectorStoreError(
-                    f"Embedding count mismatch: got {len(embeddings)}, expected {len(chunk_texts)}"
-                )
-            
-            # Validate embeddings
-            if not all(isinstance(emb, list) and len(emb) > 0 for emb in embeddings):
-                raise VectorStoreError("Invalid embeddings received from embedding provider")
-            
-            # Upsert to ChromaDB
-            logger.debug("Upserting to ChromaDB", batch_size=len(chunk_ids))
-            
-            self.collection.upsert(
-                ids=chunk_ids,
-                embeddings=embeddings,
-                metadatas=metadatas,
-                documents=documents
-            )
+            # Process in optimized batches
+            for i in range(0, len(new_chunks), batch_size):
+                batch = new_chunks[i:i + batch_size]
+                await self._upsert_batch(batch, i // batch_size + 1, len(new_chunks) // batch_size + 1)
+                
+                # Small delay to prevent overwhelming the system
+                if len(new_chunks) > batch_size:
+                    await asyncio.sleep(0.1)
             
             logger.info(
                 "Chunk upsert completed",
-                matter_path=str(self.matter_path),
-                new_chunks=len(new_chunks),
-                skipped_duplicates=skipped_count,
-                total_in_collection=self.collection.count()
+                total_processed=len(new_chunks),
+                total_skipped=skipped_count
             )
             
         except Exception as e:
             error_msg = f"Failed to upsert chunks: {str(e)}"
-            logger.error(
-                error_msg,
-                matter_path=str(self.matter_path),
-                chunk_count=len(chunks)
+            logger.error(error_msg, matter_path=str(self.matter_path))
+            raise VectorStoreError(error_msg)
+    
+    async def _upsert_batch(self, batch: List[tuple], batch_num: int, total_batches: int) -> None:
+        """Upsert a single batch of chunks with optimized processing."""
+        chunk_ids = []
+        chunk_texts = []
+        metadatas = []
+        documents = []
+        
+        for chunk, chunk_vector_id in batch:
+            chunk_ids.append(chunk_vector_id)
+            chunk_texts.append(chunk.text)
+            documents.append(chunk.text)
+            
+            # Prepare metadata for ChromaDB
+            chunk_metadata = {
+                "chunk_id": chunk.chunk_id,
+                "doc_id": chunk.doc_id,
+                "doc_name": chunk.doc_name,
+                "page_start": chunk.page_start,
+                "page_end": chunk.page_end,
+                "token_count": chunk.token_count,
+                "char_count": getattr(chunk, 'char_count', len(chunk.text)),
+                "md5": chunk.md5,
+                "section_title": getattr(chunk, 'section_title', '') or "",
+                "chunk_index": getattr(chunk, 'chunk_index', 0),
+                "has_overlap": getattr(chunk, 'overlap_info', {}).get("has_overlap", False),
+                "overlap_sentences": getattr(chunk, 'overlap_info', {}).get("overlap_sentences", 0)
+            }
+            
+            # Add custom metadata fields
+            if hasattr(chunk, 'metadata') and chunk.metadata:
+                for key, value in chunk.metadata.items():
+                    # ChromaDB metadata values must be strings, numbers, or bools
+                    if isinstance(value, (str, int, float, bool)):
+                        chunk_metadata[f"meta_{key}"] = value
+                    else:
+                        chunk_metadata[f"meta_{key}"] = str(value)
+            
+            metadatas.append(chunk_metadata)
+        
+        # Generate embeddings for batch
+        logger.debug(f"Generating embeddings for batch {batch_num}/{total_batches}", count=len(chunk_texts))
+        embeddings = await embedding_manager.embed(chunk_texts)
+        
+        if len(embeddings) != len(chunk_texts):
+            raise VectorStoreError(
+                f"Embedding count mismatch: got {len(embeddings)}, expected {len(chunk_texts)}"
             )
-            raise VectorStoreError(error_msg, recoverable=True)
+        
+        # Validate embeddings
+        if not all(isinstance(emb, list) and len(emb) > 0 for emb in embeddings):
+            raise VectorStoreError("Invalid embeddings received from embedding provider")
+        
+        # Upsert to ChromaDB
+        logger.debug(f"Upserting batch {batch_num}/{total_batches} to ChromaDB", batch_size=len(chunk_ids))
+        
+        self.collection.upsert(
+            ids=chunk_ids,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            documents=documents
+        )
+        
+        logger.debug(f"Batch {batch_num}/{total_batches} upserted successfully")
     
     async def search(
         self,
         query: str,
         k: int = 8,
-        filter_metadata: Optional[Dict[str, Any]] = None
+        filter_metadata: Optional[Dict[str, Any]] = None,
+        use_cache: bool = True
     ) -> List[SearchResult]:
         """
-        Search for similar chunks using vector similarity.
+        Search for similar chunks using vector similarity with caching optimization.
         
         Args:
             query: Search query text
             k: Number of results to return
             filter_metadata: Optional metadata filters
+            use_cache: Whether to use search cache
             
         Returns:
             List of SearchResult objects ordered by similarity
@@ -240,6 +297,15 @@ class VectorStore:
         if not query or not query.strip():
             logger.warning("Empty query provided for search")
             return []
+        
+        # Check cache first
+        if use_cache:
+            cached_results = self.search_cache.get(query, k, filter_metadata)
+            if cached_results is not None:
+                logger.debug("Returning cached search results", query=query[:50])
+                return cached_results
+        
+        search_start = time.time()
         
         try:
             # Generate query embedding

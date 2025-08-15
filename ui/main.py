@@ -22,6 +22,11 @@ from ui.utils import (
     open_pdf_at_page, copy_to_clipboard, ChatMessage, 
     format_citation, format_timestamp, truncate_text
 )
+from ui.components import (
+    LoadingSpinner, SkeletonLoader, ProgressBar, AnimatedCard,
+    NotificationManager, KeyboardShortcuts, SearchInput, ThinkingIndicator,
+    DocumentUploader, inject_animations
+)
 from app.logging_conf import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -47,39 +52,134 @@ class LettaClaimUI:
         self.send_button = None
         self.settings_drawer = None
         
+        # Enhanced UI components
+        self.loading_spinner = LoadingSpinner()
+        self.notification_manager = NotificationManager()
+        self.keyboard_shortcuts = KeyboardShortcuts()
+        self.thinking_indicator = ThinkingIndicator()
+        self.current_progress_bar = None
+        
+        # UI state
+        self.is_processing = False
+        self.document_skeleton = None
+        self.sources_skeleton = None
+        
     async def create_ui(self):
-        """Create the main UI layout."""
+        """Create the main UI layout with enhanced components."""
+        # Inject custom CSS animations
+        inject_animations()
+        
         # Set up the page
         ui.page_title("Letta Construction Claim Assistant")
+        ui.add_head_html('<meta name="viewport" content="width=device-width, initial-scale=1">')
         
-        # Check backend connectivity
-        await self._check_backend_connection()
+        # Setup keyboard shortcuts
+        self._setup_keyboard_shortcuts()
         
-        # Load initial data
-        await self._load_matters()
+        # Show initial loading
+        loading_container = self.loading_spinner.show("Initializing application...")
         
-        # Create main layout
-        with ui.row().classes('w-full h-screen'):
-            # Left pane: Matter & Documents
-            await self._create_left_pane()
+        try:
+            # Check backend connectivity
+            await self._check_backend_connection()
             
-            # Center pane: Chat Interface  
-            await self._create_center_pane()
+            # Load initial data
+            await self._load_matters()
             
-            # Right pane: Sources
-            await self._create_right_pane()
+            # Hide loading
+            self.loading_spinner.hide()
+            
+            # Create main layout with animations
+            with ui.row().classes('w-full h-screen animate-fade-in'):
+                # Left pane: Matter & Documents
+                await self._create_left_pane()
+                
+                # Center pane: Chat Interface  
+                await self._create_center_pane()
+                
+                # Right pane: Sources
+                await self._create_right_pane()
+            
+            # Settings drawer
+            await self._create_settings_drawer()
+            
+            # Initialize chat display
+            await self._update_chat_display()
+            
+            # Start background job polling
+            ui.timer(2.0, self._poll_job_status)
+            
+            # Initialize consent checking for any existing external providers
+            await self._check_provider_consent_status()
+            
+            # Show welcome notification
+            self.notification_manager.success("Application loaded successfully!")
+            
+        except Exception as e:
+            self.loading_spinner.hide()
+            self.notification_manager.error(f"Failed to initialize application: {str(e)}")
+            logger.error("UI initialization failed", error=str(e))
+    
+    def _setup_keyboard_shortcuts(self):
+        """Setup keyboard shortcuts for the application."""
+        # Create new matter
+        self.keyboard_shortcuts.register(
+            "ctrl+n",
+            lambda: asyncio.create_task(self._show_create_matter_dialog()),
+            "Create new matter"
+        )
         
-        # Settings drawer
-        await self._create_settings_drawer()
+        # Send message
+        self.keyboard_shortcuts.register(
+            "ctrl+enter",
+            lambda: asyncio.create_task(self._send_message()),
+            "Send chat message"
+        )
         
-        # Initialize chat display
-        await self._update_chat_display()
+        # Focus search/input
+        self.keyboard_shortcuts.register(
+            "ctrl+k",
+            lambda: self._focus_chat_input(),
+            "Focus chat input"
+        )
         
-        # Start background job polling
-        ui.timer(2.0, self._poll_job_status)
+        # Open settings
+        self.keyboard_shortcuts.register(
+            "ctrl+comma",
+            lambda: self._toggle_settings_drawer(),
+            "Toggle settings"
+        )
         
-        # Initialize consent checking for any existing external providers
-        await self._check_provider_consent_status()
+        # Show help
+        self.keyboard_shortcuts.register(
+            "F1",
+            lambda: self.keyboard_shortcuts.show_help(),
+            "Show keyboard shortcuts"
+        )
+        
+        # Escape to clear/cancel
+        self.keyboard_shortcuts.register(
+            "Escape",
+            lambda: self._handle_escape(),
+            "Cancel current operation"
+        )
+    
+    def _focus_chat_input(self):
+        """Focus the chat input field."""
+        if self.chat_input:
+            self.chat_input.run_method('focus')
+    
+    def _toggle_settings_drawer(self):
+        """Toggle settings drawer."""
+        if self.settings_drawer:
+            # NiceGUI drawer toggle logic would go here
+            pass
+    
+    def _handle_escape(self):
+        """Handle escape key - cancel operations, close dialogs."""
+        if self.is_processing:
+            # Could implement cancellation logic here
+            pass
     
     async def _check_backend_connection(self):
         """Check if backend API is available."""
