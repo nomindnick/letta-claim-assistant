@@ -6,11 +6,14 @@ job status tracking, chat/RAG operations, and settings management.
 """
 
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ValidationError
 import json
 import time
+import traceback
 
 from .models import (
     CreateMatterRequest, CreateMatterResponse, MatterSummary,
@@ -26,6 +29,12 @@ from .quality_metrics import QualityThresholds as QualityThresholdsClass
 from .hybrid_retrieval import RetrievalWeights as RetrievalWeightsClass
 from .privacy_consent import consent_manager, ConsentType
 from .settings import settings
+from .error_handler import (
+    BaseApplicationError, handle_error, create_context, ValidationError as AppValidationError,
+    ResourceError, ServiceUnavailableError, FileProcessingError
+)
+from .resource_monitor import resource_monitor
+from .degradation import degradation_manager
 
 logger = get_logger(__name__)
 
@@ -42,11 +51,188 @@ app.add_middleware(
 )
 
 
+# Custom exception handlers
+@app.exception_handler(BaseApplicationError)
+async def application_error_handler(request: Request, exc: BaseApplicationError):
+    """Handle application-specific errors."""
+    logger.error(
+        f"Application error in {request.method} {request.url.path}",
+        error_code=exc.error_code,
+        severity=exc.severity.value,
+        user_message=exc.user_message
+    )
+    
+    # Determine HTTP status code based on error type
+    if isinstance(exc, AppValidationError):
+        status_code = 400
+    elif isinstance(exc, ResourceError):
+        status_code = 507  # Insufficient Storage
+    elif isinstance(exc, ServiceUnavailableError):
+        status_code = 503
+    elif isinstance(exc, FileProcessingError):
+        status_code = 422  # Unprocessable Entity
+    else:
+        status_code = 500
+    
+    return JSONResponse(
+        status_code=status_code,
+        content=exc.to_dict()
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    """Handle FastAPI validation errors."""
+    logger.warning(
+        f"Validation error in {request.method} {request.url.path}",
+        errors=str(exc.errors())
+    )
+    
+    # Convert to our error format
+    validation_error = AppValidationError(
+        field="request",
+        value=str(exc),
+        constraint="Request validation failed",
+        user_message="Invalid request data",
+        suggestion="Please check your request format and try again"
+    )
+    
+    return JSONResponse(
+        status_code=400,
+        content=validation_error.to_dict()
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle unexpected exceptions."""
+    logger.error(
+        f"Unexpected error in {request.method} {request.url.path}",
+        error=str(exc),
+        traceback=traceback.format_exc()
+    )
+    
+    # Convert to application error
+    app_error = handle_error(exc, create_context(
+        operation=f"{request.method} {request.url.path}"
+    ), notify_user=False)
+    
+    return JSONResponse(
+        status_code=500,
+        content=app_error.to_dict()
+    )
+
+
+# Middleware for request validation and error context
+@app.middleware("http")
+async def error_context_middleware(request: Request, call_next):
+    """Middleware to add error context and handle request validation."""
+    start_time = time.time()
+    
+    try:
+        # Add request context for error handling
+        request.state.error_context = create_context(
+            operation=f"{request.method} {request.url.path}"
+        )
+        
+        response = await call_next(request)
+        
+        # Log successful requests
+        process_time = time.time() - start_time
+        logger.debug(
+            f"Request completed",
+            method=request.method,
+            path=str(request.url.path),
+            status_code=response.status_code,
+            process_time=f"{process_time:.3f}s"
+        )
+        
+        return response
+        
+    except Exception as exc:
+        # Let exception handlers deal with the error
+        raise exc
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup."""
     logger.info("Starting Letta Claim Assistant API")
     await ensure_job_queue_started()
+
+
+# Health and monitoring endpoints
+@app.get("/api/health")
+async def health_check():
+    """Get application health status."""
+    try:
+        # Get comprehensive system status
+        system_status = await resource_monitor.get_comprehensive_status()
+        
+        # Get degradation status
+        degradation_status = degradation_manager.get_degradation_status()
+        
+        # Get error statistics
+        from .error_handler import error_handler
+        error_stats = error_handler.get_error_stats()
+        
+        return {
+            "status": "healthy" if system_status["overall_status"] == "healthy" else "degraded",
+            "timestamp": system_status["timestamp"],
+            "system": system_status,
+            "degradation": degradation_status,
+            "errors": error_stats,
+            "version": "0.1.0"
+        }
+    except Exception as e:
+        # Even health check can fail
+        app_error = handle_error(e, create_context(operation="health_check"), notify_user=False)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "error": app_error.to_dict(),
+                "timestamp": time.time()
+            }
+        )
+
+
+@app.get("/api/system/status")
+async def system_status():
+    """Get detailed system status."""
+    try:
+        status = await resource_monitor.get_comprehensive_status()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/system/degradation")
+async def degradation_status():
+    """Get service degradation status."""
+    try:
+        status = degradation_manager.get_degradation_status()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/system/recovery/{service_name}")
+async def attempt_service_recovery(service_name: str):
+    """Attempt to recover a degraded service."""
+    try:
+        recovery_result = await degradation_manager.attempt_service_recovery(service_name)
+        return {
+            "service": service_name,
+            "recovery_attempted": True,
+            "recovery_successful": recovery_result
+        }
+    except Exception as e:
+        app_error = handle_error(e, create_context(
+            operation="service_recovery",
+            provider=service_name
+        ), notify_user=False)
+        raise HTTPException(status_code=500, detail=app_error.to_dict())
     
     # Initialize default Ollama provider
     try:
@@ -320,23 +506,243 @@ async def upload_files(matter_id: str, files: List[UploadFile] = File(...)):
 
 @app.get("/api/jobs/{job_id}")
 async def get_job_status(job_id: str):
-    """Get status of a background job."""
+    """Get enhanced status of a background job."""
     try:
         job_info = await job_queue.get_job_status(job_id)
         if not job_info:
             raise HTTPException(status_code=404, detail="Job not found")
         
-        return {
+        response = {
             "id": job_info.job_id,
+            "type": job_info.job_type,
             "status": job_info.status.value,
             "progress": job_info.progress,
-            "detail": job_info.message,
-            "error": job_info.error_message
+            "message": job_info.message,
+            "created_at": job_info.created_at.isoformat() if job_info.created_at else None,
+            "started_at": job_info.started_at.isoformat() if job_info.started_at else None,
+            "completed_at": job_info.completed_at.isoformat() if job_info.completed_at else None,
+            "error_message": job_info.error_message,
+            "result": job_info.result,
+            "retry_count": getattr(job_info, "retry_count", 0),
+            "max_retries": getattr(job_info, "max_retries", 3),
+            "priority": getattr(job_info, "priority", 0),
+            "estimated_duration": getattr(job_info, "estimated_duration", None)
         }
+        
+        # Include ETA if available
+        if (hasattr(job_info, 'progress_history') and 
+            job_info.progress_history):
+            latest_progress = job_info.progress_history[-1]
+            if "eta_seconds" in latest_progress:
+                response["eta_seconds"] = latest_progress["eta_seconds"]
+            if "elapsed_seconds" in latest_progress:
+                response["elapsed_seconds"] = latest_progress["elapsed_seconds"]
+        
+        return response
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to get job status", error=str(e))
+        logger.error("Failed to get job status", job_id=job_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/jobs")
+async def get_all_jobs(limit: int = 50, status_filter: str = None):
+    """Get list of recent jobs with optional status filtering."""
+    try:
+        if status_filter:
+            # Get from persistent storage with filter
+            jobs = await job_queue.get_job_history(limit, status_filter)
+        else:
+            # Get recent jobs from memory
+            jobs = await job_queue.get_all_jobs(limit)
+        
+        return {
+            "jobs": [{
+                "id": job.job_id,
+                "type": job.job_type,
+                "status": job.status.value,
+                "progress": job.progress,
+                "message": job.message,
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                "retry_count": getattr(job, "retry_count", 0),
+                "priority": getattr(job, "priority", 0)
+            } for job in jobs],
+            "count": len(jobs)
+        }
+        
+    except Exception as e:
+        logger.error("Failed to get jobs list", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    """Cancel a running or queued job."""
+    try:
+        success = await job_queue.cancel_job(job_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Job not found or cannot be cancelled")
+        
+        return {"message": f"Job {job_id} cancelled successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to cancel job", job_id=job_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/jobs/{job_id}/retry")
+async def retry_job(job_id: str):
+    """Manually retry a failed job."""
+    try:
+        success = await job_queue.retry_job(job_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Job not found or cannot be retried")
+        
+        return {"message": f"Job {job_id} queued for retry"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to retry job", job_id=job_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/jobs/queue/status")
+async def get_queue_status():
+    """Get overall job queue status."""
+    try:
+        running_jobs = await job_queue.get_running_jobs()
+        queued_jobs = await job_queue.get_queued_jobs()
+        
+        return {
+            "running_count": len(running_jobs),
+            "queued_count": len(queued_jobs),
+            "max_concurrent": job_queue.max_concurrent,
+            "running_jobs": [{
+                "id": job.job_id,
+                "type": job.job_type,
+                "progress": job.progress,
+                "message": job.message,
+                "started_at": job.started_at.isoformat() if job.started_at else None
+            } for job in running_jobs],
+            "queued_jobs": [{
+                "id": job.job_id,
+                "type": job.job_type,
+                "priority": getattr(job, "priority", 0),
+                "created_at": job.created_at.isoformat() if job.created_at else None
+            } for job in queued_jobs[:10]]  # Show only first 10 queued
+        }
+        
+    except Exception as e:
+        logger.error("Failed to get queue status", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/jobs/cleanup")
+async def cleanup_old_jobs(older_than_hours: int = 24):
+    """Clean up old completed jobs."""
+    try:
+        cleaned_count = await job_queue.cleanup_completed_jobs(older_than_hours)
+        return {
+            "message": f"Cleaned up {cleaned_count} old jobs",
+            "cleaned_count": cleaned_count
+        }
+        
+    except Exception as e:
+        logger.error("Failed to cleanup jobs", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# New Job Type Submission Endpoints
+@app.post("/api/jobs/batch-processing")
+async def submit_batch_processing_job(
+    file_batches: List[Dict[str, Any]],
+    force_ocr: bool = False,
+    ocr_language: str = "eng",
+    max_concurrent_files: int = 3,
+    priority: int = 1
+):
+    """Submit a batch document processing job."""
+    try:
+        job_params = {
+            "file_batches": file_batches,
+            "force_ocr": force_ocr,
+            "ocr_language": ocr_language,
+            "max_concurrent_files": max_concurrent_files
+        }
+        
+        job_id = await job_queue.submit_job(
+            job_type="batch_document_processing",
+            params=job_params,
+            priority=priority,
+            max_retries=2
+        )
+        
+        return {"job_id": job_id}
+        
+    except Exception as e:
+        logger.error("Failed to submit batch processing job", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/jobs/large-model-operation")
+async def submit_large_model_operation_job(
+    operation_type: str,
+    matter_id: str = None,
+    parameters: Dict[str, Any] = None,
+    priority: int = 1
+):
+    """Submit a large model operation job."""
+    try:
+        job_params = {
+            "operation_type": operation_type,
+            "matter_id": matter_id,
+            **(parameters or {})
+        }
+        
+        job_id = await job_queue.submit_job(
+            job_type="large_model_operation",
+            params=job_params,
+            priority=priority,
+            max_retries=3
+        )
+        
+        return {"job_id": job_id}
+        
+    except Exception as e:
+        logger.error("Failed to submit large model operation job", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/jobs/matter-analysis")
+async def submit_matter_analysis_job(
+    matter_id: str,
+    analysis_types: List[str] = ["overview", "timeline", "entities"],
+    priority: int = 0
+):
+    """Submit a matter analysis job."""
+    try:
+        job_params = {
+            "matter_id": matter_id,
+            "analysis_types": analysis_types
+        }
+        
+        job_id = await job_queue.submit_job(
+            job_type="matter_analysis",
+            params=job_params,
+            priority=priority,
+            max_retries=2
+        )
+        
+        return {"job_id": job_id}
+        
+    except Exception as e:
+        logger.error("Failed to submit matter analysis job", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -15,6 +15,11 @@ import tempfile
 import shutil
 
 from .logging_conf import get_logger
+from .error_handler import (
+    FileProcessingError, ResourceError, handle_error, create_context,
+    ErrorSeverity, RecoveryStrategy, RecoveryAction
+)
+from .resource_monitor import check_disk_space_before_operation
 
 logger = get_logger(__name__)
 
@@ -32,13 +37,21 @@ class OCRResult:
     processing_time_seconds: float = 0.0
 
 
-class PDFProcessingError(Exception):
-    """Raised when PDF processing fails with recoverable error."""
+# Legacy exception for backward compatibility
+class PDFProcessingError(FileProcessingError):
+    """Legacy PDF processing error - use FileProcessingError instead."""
     
     def __init__(self, message: str, retry_possible: bool = True):
+        # Map to new error format
+        recovery_strategy = RecoveryStrategy.RETRY if retry_possible else RecoveryStrategy.MANUAL
+        super().__init__(
+            file_path="unknown",
+            operation="OCR processing",
+            reason=message,
+            recovery_strategy=recovery_strategy
+        )
         self.message = message
         self.retry_possible = retry_possible
-        super().__init__(message)
 
 
 class OCRProcessor:
@@ -79,14 +92,41 @@ class OCRProcessor:
         
         # Validate input file
         if not input_path.exists():
-            error_msg = f"Input PDF file not found: {input_path}"
-            logger.error(error_msg)
+            error = FileProcessingError(
+                file_path=input_path,
+                operation="OCR processing",
+                reason="File not found",
+                error_code="OCR_FILE_NOT_FOUND",
+                suggestion="Please verify the file path and ensure the file exists"
+            )
+            handle_error(error, create_context(
+                operation="OCR processing",
+                file_path=input_path
+            ))
             return OCRResult(
                 success=False,
                 output_path=None,
                 pages_processed=0,
                 ocr_applied=False,
-                error_message=error_msg
+                error_message=error.user_message
+            )
+        
+        # Check file size and disk space requirements
+        try:
+            file_size = input_path.stat().st_size
+            required_space_gb = (file_size * 3) / (1024**3)  # Estimate 3x file size needed
+            check_disk_space_before_operation(required_space_gb, output_path.parent)
+        except ResourceError as e:
+            handle_error(e, create_context(
+                operation="OCR processing",
+                file_path=input_path
+            ))
+            return OCRResult(
+                success=False,
+                output_path=None,
+                pages_processed=0,
+                ocr_applied=False,
+                error_message=e.user_message
             )
         
         # Ensure output directory exists
@@ -285,7 +325,12 @@ class OCRProcessor:
                 if remaining_stderr:
                     stderr_lines.append(remaining_stderr.decode('utf-8', errors='ignore'))
                 
-                error_message = self._parse_ocr_error('\n'.join(stderr_lines))
+                error = self._parse_ocr_error('\n'.join(stderr_lines), Path(cmd[-2]))  # Input file path
+                handle_error(error, create_context(
+                    operation="OCR processing", 
+                    file_path=cmd[-2]
+                ))
+                error_message = error.user_message
                 
                 return OCRResult(
                     success=False,
@@ -314,30 +359,151 @@ class OCRProcessor:
             logger.error(error_msg)
             raise PDFProcessingError(error_msg, retry_possible=False)
     
-    def _parse_ocr_error(self, stderr_output: str) -> str:
-        """Parse OCRmyPDF error output to provide user-friendly error message."""
+    def _parse_ocr_error(self, stderr_output: str, file_path: Path) -> FileProcessingError:
+        """Parse OCRmyPDF error output and create appropriate FileProcessingError."""
+        
+        # Check for specific error patterns
         if "encrypted" in stderr_output.lower():
-            return "PDF is encrypted and cannot be processed. Please provide an unencrypted version."
+            return FileProcessingError(
+                file_path=file_path,
+                operation="OCR processing",
+                reason="PDF is encrypted",
+                error_code="OCR_ENCRYPTED_PDF",
+                user_message="This PDF is encrypted and cannot be processed",
+                suggestion="Please provide an unencrypted version of the PDF or remove password protection",
+                recovery_actions=[
+                    RecoveryAction(
+                        action_id="decrypt_pdf",
+                        label="Remove encryption",
+                        description="Remove password protection from the PDF",
+                        is_primary=True
+                    ),
+                    RecoveryAction(
+                        action_id="try_different_file",
+                        label="Try different file",
+                        description="Use a different PDF file"
+                    )
+                ],
+                recovery_strategy=RecoveryStrategy.MANUAL
+            )
         
         if "password" in stderr_output.lower():
-            return "PDF is password-protected. Please provide the password or an unprotected version."
+            return FileProcessingError(
+                file_path=file_path,
+                operation="OCR processing",
+                reason="PDF is password-protected",
+                error_code="OCR_PASSWORD_PROTECTED",
+                user_message="This PDF is password-protected",
+                suggestion="Please provide the password or use an unprotected version",
+                recovery_actions=[
+                    RecoveryAction(
+                        action_id="provide_password",
+                        label="Provide password",
+                        description="Enter the PDF password to unlock the file",
+                        is_primary=True
+                    )
+                ],
+                recovery_strategy=RecoveryStrategy.MANUAL
+            )
         
         if "corrupted" in stderr_output.lower() or "damaged" in stderr_output.lower():
-            return "PDF file appears to be corrupted. Please try with a different file."
+            return FileProcessingError(
+                file_path=file_path,
+                operation="OCR processing",
+                reason="PDF file is corrupted",
+                error_code="OCR_CORRUPTED_PDF",
+                user_message="The PDF file appears to be corrupted or damaged",
+                suggestion="Please try with a different file or repair the PDF",
+                recovery_actions=[
+                    RecoveryAction(
+                        action_id="try_repair",
+                        label="Try repair",
+                        description="Attempt to repair the PDF file"
+                    ),
+                    RecoveryAction(
+                        action_id="try_different_file",
+                        label="Use different file",
+                        description="Select a different PDF file",
+                        is_primary=True
+                    )
+                ],
+                recovery_strategy=RecoveryStrategy.MANUAL
+            )
         
         if "timeout" in stderr_output.lower():
-            return "OCR processing timed out. The file may be too large or complex."
+            return FileProcessingError(
+                file_path=file_path,
+                operation="OCR processing",
+                reason="Processing timeout",
+                error_code="OCR_TIMEOUT",
+                user_message="OCR processing timed out - the file may be too large or complex",
+                suggestion="Try processing smaller sections or increase the timeout setting",
+                recovery_actions=[
+                    RecoveryAction(
+                        action_id="retry_force_ocr",
+                        label="Retry with Force OCR",
+                        description="Retry processing with force OCR disabled",
+                        is_primary=True
+                    ),
+                    RecoveryAction(
+                        action_id="split_pdf",
+                        label="Split PDF",
+                        description="Split the PDF into smaller sections"
+                    )
+                ],
+                recovery_strategy=RecoveryStrategy.RETRY
+            )
         
         if "no space left" in stderr_output.lower():
-            return "Insufficient disk space to complete OCR processing."
+            return ResourceError(
+                resource_type="disk",
+                message="Insufficient disk space for OCR processing",
+                user_message="Not enough disk space to complete OCR processing",
+                suggestion="Please free up disk space and try again",
+                context=create_context(operation="OCR processing", file_path=file_path),
+                recovery_actions=[
+                    RecoveryAction(
+                        action_id="free_space",
+                        label="Free disk space",
+                        description="Delete unnecessary files to free up space",
+                        is_primary=True
+                    )
+                ]
+            )
         
-        # Return first meaningful error line
+        # Parse for first meaningful error line
         lines = stderr_output.strip().split('\n')
+        error_detail = None
         for line in lines:
             if line.strip() and not line.startswith('INFO:'):
-                return f"OCR processing failed: {line.strip()}"
+                error_detail = line.strip()
+                break
         
-        return "OCR processing failed with unknown error"
+        if not error_detail:
+            error_detail = "Unknown OCR processing error"
+        
+        return FileProcessingError(
+            file_path=file_path,
+            operation="OCR processing",
+            reason=error_detail,
+            error_code="OCR_UNKNOWN_ERROR",
+            user_message=f"OCR processing failed: {error_detail}",
+            suggestion="Please try again or contact support if the problem persists",
+            recovery_actions=[
+                RecoveryAction(
+                    action_id="retry_ocr",
+                    label="Retry",
+                    description="Try OCR processing again",
+                    is_primary=True
+                ),
+                RecoveryAction(
+                    action_id="skip_ocr",
+                    label="Skip OCR",
+                    description="Process without OCR (text-based PDFs only)"
+                )
+            ],
+            recovery_strategy=RecoveryStrategy.RETRY
+        )
     
     async def _get_pdf_page_count(self, pdf_path: Path) -> int:
         """Get the number of pages in a PDF file."""

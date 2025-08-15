@@ -142,7 +142,7 @@ class APIClient:
                 except:
                     pass
     
-    # Job Status
+    # Job Management
     async def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get status of a background job."""
         session = await self._get_session()
@@ -152,6 +152,141 @@ class APIClient:
                 return await response.json()
         except Exception as e:
             logger.error("Failed to get job status", error=str(e))
+            raise
+    
+    async def get_all_jobs(self, limit: int = 50, status_filter: str = None) -> Dict[str, Any]:
+        """Get list of recent jobs with optional status filtering."""
+        session = await self._get_session()
+        try:
+            params = {"limit": limit}
+            if status_filter:
+                params["status_filter"] = status_filter
+                
+            async with session.get(f"{self.base_url}/api/jobs", params=params) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to get jobs list", error=str(e))
+            raise
+    
+    async def cancel_job(self, job_id: str) -> Dict[str, Any]:
+        """Cancel a running or queued job."""
+        session = await self._get_session()
+        try:
+            async with session.post(f"{self.base_url}/api/jobs/{job_id}/cancel") as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to cancel job", job_id=job_id, error=str(e))
+            raise
+    
+    async def retry_job(self, job_id: str) -> Dict[str, Any]:
+        """Manually retry a failed job."""
+        session = await self._get_session()
+        try:
+            async with session.post(f"{self.base_url}/api/jobs/{job_id}/retry") as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to retry job", job_id=job_id, error=str(e))
+            raise
+    
+    async def get_queue_status(self) -> Dict[str, Any]:
+        """Get overall job queue status."""
+        session = await self._get_session()
+        try:
+            async with session.get(f"{self.base_url}/api/jobs/queue/status") as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to get queue status", error=str(e))
+            raise
+    
+    async def cleanup_old_jobs(self, older_than_hours: int = 24) -> Dict[str, Any]:
+        """Clean up old completed jobs."""
+        session = await self._get_session()
+        try:
+            async with session.post(f"{self.base_url}/api/jobs/cleanup", 
+                                  params={"older_than_hours": older_than_hours}) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to cleanup jobs", error=str(e))
+            raise
+    
+    async def submit_batch_processing_job(
+        self,
+        file_batches: List[Dict[str, Any]],
+        force_ocr: bool = False,
+        ocr_language: str = "eng",
+        max_concurrent_files: int = 3,
+        priority: int = 1
+    ) -> Dict[str, Any]:
+        """Submit a batch document processing job."""
+        session = await self._get_session()
+        try:
+            data = {
+                "file_batches": file_batches,
+                "force_ocr": force_ocr,
+                "ocr_language": ocr_language,
+                "max_concurrent_files": max_concurrent_files,
+                "priority": priority
+            }
+            
+            async with session.post(f"{self.base_url}/api/jobs/batch-processing", 
+                                  json=data) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to submit batch processing job", error=str(e))
+            raise
+    
+    async def submit_large_model_operation_job(
+        self,
+        operation_type: str,
+        matter_id: str = None,
+        parameters: Dict[str, Any] = None,
+        priority: int = 1
+    ) -> Dict[str, Any]:
+        """Submit a large model operation job."""
+        session = await self._get_session()
+        try:
+            data = {
+                "operation_type": operation_type,
+                "matter_id": matter_id,
+                "parameters": parameters or {},
+                "priority": priority
+            }
+            
+            async with session.post(f"{self.base_url}/api/jobs/large-model-operation", 
+                                  json=data) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to submit large model operation job", error=str(e))
+            raise
+    
+    async def submit_matter_analysis_job(
+        self,
+        matter_id: str,
+        analysis_types: List[str] = ["overview", "timeline", "entities"],
+        priority: int = 0
+    ) -> Dict[str, Any]:
+        """Submit a matter analysis job."""
+        session = await self._get_session()
+        try:
+            data = {
+                "matter_id": matter_id,
+                "analysis_types": analysis_types,
+                "priority": priority
+            }
+            
+            async with session.post(f"{self.base_url}/api/jobs/matter-analysis", 
+                                  json=data) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to submit matter analysis job", error=str(e))
             raise
     
     # Chat / RAG
