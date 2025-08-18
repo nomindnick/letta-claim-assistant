@@ -154,6 +154,27 @@ class MetricsCollector:
                 "ingestion": self.ingestion_stats.copy(),
                 "rag": self.rag_stats.copy(),
                 "system": self.system_stats.copy(),
+                "letta": {
+                    "connection_state": self.letta_stats["connection_state"],
+                    "connection_attempts": self.letta_stats["connection_attempts"],
+                    "successful_connections": self.letta_stats["successful_connections"],
+                    "failed_connections": self.letta_stats["failed_connections"],
+                    "recall_operations": self.letta_stats["recall_operations"],
+                    "upsert_operations": self.letta_stats["upsert_operations"],
+                    "suggest_operations": self.letta_stats["suggest_operations"],
+                    "average_latency_ms": (
+                        self.letta_stats["total_letta_latency"] * 1000 / 
+                        max(1, self.letta_stats["recall_operations"] + 
+                            self.letta_stats["upsert_operations"] + 
+                            self.letta_stats["suggest_operations"])
+                    ),
+                    "health_checks": self.letta_stats["health_checks"],
+                    "health_check_failures": self.letta_stats["health_check_failures"],
+                    "health_check_success_rate": (
+                        (self.letta_stats["health_checks"] - self.letta_stats["health_check_failures"]) /
+                        max(1, self.letta_stats["health_checks"]) * 100
+                    )
+                },
                 "aggregated": {}
             }
             
@@ -375,10 +396,14 @@ class SystemMonitor:
         
         # Check Letta
         try:
-            from .letta_adapter import LettaAdapter
+            from .letta_connection import connection_manager
             
-            # This is a basic import check - could be enhanced
-            status.services["letta"] = "healthy"
+            if connection_manager.is_connected():
+                status.services["letta"] = "healthy"
+            elif connection_manager.is_fallback():
+                status.services["letta"] = "fallback"
+            else:
+                status.services["letta"] = "unavailable"
             
         except Exception:
             status.services["letta"] = "warning"

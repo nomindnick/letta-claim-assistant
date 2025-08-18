@@ -42,6 +42,7 @@ from .logging_conf import get_logger
 from .models import KnowledgeItem, SourceChunk
 from .letta_server import server_manager
 from .letta_config import config_manager, LettaAgentConfig
+from .letta_connection import connection_manager, ConnectionState
 
 logger = get_logger(__name__)
 
@@ -88,20 +89,16 @@ class LettaAdapter:
             return not self.fallback_mode
         
         try:
-            # Check if server is available
-            if not server_manager._is_running and not server_manager.start():
+            # Use connection manager for connection
+            if not await connection_manager.connect():
                 logger.warning("Letta server not available, using fallback mode")
                 self.fallback_mode = True
                 self._initialized = True
                 return False
             
-            # Initialize client
-            base_url = server_manager.get_base_url()
-            self.client = AsyncLetta(base_url=base_url)
-            self.sync_client = Letta(base_url=base_url)
-            
-            # Test connection
-            await self.client.health.health_check()
+            # Get client from connection manager
+            self.client = connection_manager.client
+            self.sync_client = connection_manager.sync_client
             
             # Initialize or load agent
             await self._initialize_or_load_agent_async()
@@ -112,7 +109,7 @@ class LettaAdapter:
             logger.info(
                 "LettaAdapter initialized successfully",
                 agent_id=self.agent_id,
-                base_url=base_url
+                connection_state=connection_manager.get_state().value
             )
             return True
             
@@ -138,16 +135,26 @@ class LettaAdapter:
             logger.warning("Letta not available, returning empty memory list")
             return []
         
-        if not self.client or not self.agent_id:
+        if not self.agent_id:
             return []
         
-        try:
-            # Search archival memory for relevant items
-            memory_results = await self.client.agents.search_archival_memory(
+        # Use connection manager to execute with retry and metrics
+        async def _recall_operation():
+            return await self.client.agents.search_archival_memory(
                 agent_id=self.agent_id,
                 query=query,
                 limit=top_k * 2  # Get more than needed for filtering
             )
+        
+        try:
+            # Execute with retry and metrics tracking
+            memory_results = await connection_manager.execute_with_retry(
+                "recall",
+                _recall_operation
+            )
+            
+            if not memory_results:
+                return []
             
             knowledge_items = []
             for memory_obj in memory_results[:top_k]:
@@ -212,7 +219,7 @@ class LettaAdapter:
             logger.warning("Letta not available, skipping interaction storage")
             return
         
-        if not self.client or not self.agent_id:
+        if not self.agent_id:
             return
         
         try:
@@ -229,10 +236,16 @@ class LettaAdapter:
                 "facts_extracted": len(extracted_facts)
             }
             
-            # Store interaction summary
-            await self.client.agents.insert_archival_memory(
-                agent_id=self.agent_id,
-                memory=json.dumps(interaction_summary)
+            # Store interaction summary with retry
+            async def _insert_summary():
+                return await self.client.agents.insert_archival_memory(
+                    agent_id=self.agent_id,
+                    memory=json.dumps(interaction_summary)
+                )
+            
+            await connection_manager.execute_with_retry(
+                "upsert",
+                _insert_summary
             )
             
             # Store each extracted knowledge item
@@ -247,9 +260,15 @@ class LettaAdapter:
                     "extracted_from": timestamp
                 }
                 
-                await self.client.agents.insert_archival_memory(
-                    agent_id=self.agent_id,
-                    memory=json.dumps(fact_data)
+                async def _insert_fact():
+                    return await self.client.agents.insert_archival_memory(
+                        agent_id=self.agent_id,
+                        memory=json.dumps(fact_data)
+                    )
+                
+                await connection_manager.execute_with_retry(
+                    "upsert",
+                    _insert_fact
                 )
             
             # Update core memory with recent activity context
@@ -307,7 +326,7 @@ class LettaAdapter:
             logger.warning("Letta not available, returning generic follow-ups")
             return self._fallback_followups()
         
-        if not self.client or not self.agent_id:
+        if not self.agent_id:
             return self._fallback_followups()
         
         try:
@@ -325,13 +344,22 @@ Generate 3-4 specific follow-up questions that would help a construction attorne
 
 Return only the questions, one per line."""
             
-            # Send message to agent for follow-up generation
-            response = await self.client.messages.send_message(
-                agent_id=self.agent_id,
-                role="user",
-                message=followup_prompt,
-                stream=False
+            # Send message to agent for follow-up generation with retry
+            async def _suggest_operation():
+                return await self.client.messages.send_message(
+                    agent_id=self.agent_id,
+                    role="user",
+                    message=followup_prompt,
+                    stream=False
+                )
+            
+            response = await connection_manager.execute_with_retry(
+                "suggest",
+                _suggest_operation
             )
+            
+            if not response:
+                return self._fallback_followups()
             
             # Parse response to extract follow-up questions
             followups = []
@@ -359,23 +387,40 @@ Return only the questions, one per line."""
         """Get statistics about agent memory usage."""
         # Ensure initialized
         if not await self._ensure_initialized():
-            return {"status": "unavailable", "memory_items": 0}
+            return {
+                "status": "unavailable",
+                "memory_items": 0,
+                "connection_state": connection_manager.get_state().value,
+                "connection_metrics": connection_manager.get_metrics()
+            }
         
-        if not self.client or not self.agent_id:
-            return {"status": "unavailable", "memory_items": 0}
+        if not self.agent_id:
+            return {
+                "status": "unavailable",
+                "memory_items": 0,
+                "connection_state": connection_manager.get_state().value
+            }
         
         try:
-            # Get archival memory count
-            memory_results = await self.client.agents.get_archival_memory(
-                agent_id=self.agent_id,
-                limit=1000  # Get count estimate
+            # Get archival memory count with retry
+            async def _get_memory_operation():
+                return await self.client.agents.get_archival_memory(
+                    agent_id=self.agent_id,
+                    limit=1000  # Get count estimate
+                )
+            
+            memory_results = await connection_manager.execute_with_retry(
+                "get_memory_stats",
+                _get_memory_operation
             )
             
             return {
                 "status": "active",
-                "memory_items": len(memory_results),
+                "memory_items": len(memory_results) if memory_results else 0,
                 "agent_id": self.agent_id,
-                "matter_name": self.matter_name
+                "matter_name": self.matter_name,
+                "connection_state": connection_manager.get_state().value,
+                "connection_metrics": connection_manager.get_metrics()
             }
             
         except Exception as e:
