@@ -27,6 +27,8 @@ from app.settings import settings
 from app.logging_conf import setup_logging, get_logger
 from app.api import app as fastapi_app
 from ui.main import create_ui_app
+from app.letta_server import server_manager
+from app.letta_config import config_manager
 
 
 def setup_application() -> bool:
@@ -55,6 +57,28 @@ def setup_application() -> bool:
         
         # Ensure data directory exists
         config.data_root.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize Letta server if configured
+        if config.letta_server_auto_start:
+            logger.info("Initializing Letta server")
+            try:
+                # Configure server manager from settings
+                server_manager.configure(
+                    mode=config.letta_server_mode,
+                    host=config.letta_server_host,
+                    port=config.letta_server_port,
+                    startup_timeout=config.letta_server_startup_timeout,
+                    health_check_interval=config.letta_server_health_check_interval
+                )
+                
+                # Start server
+                if server_manager.start():
+                    logger.info(f"Letta server started on {server_manager.get_base_url()}")
+                else:
+                    logger.warning("Letta server failed to start, continuing in fallback mode")
+            except Exception as e:
+                logger.error(f"Failed to initialize Letta server: {e}")
+                logger.warning("Continuing without Letta server (fallback mode)")
         
         logger.info("Application setup completed successfully")
         return True
@@ -115,6 +139,14 @@ def main():
         logger.error("Application failed", error=str(e))
         sys.exit(1)
     finally:
+        # Clean shutdown of Letta server
+        try:
+            if server_manager._is_running:
+                logger.info("Stopping Letta server")
+                server_manager.stop()
+        except Exception as e:
+            logger.error(f"Error stopping Letta server: {e}")
+        
         logger.info("Application shutdown complete")
 
 

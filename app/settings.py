@@ -41,6 +41,14 @@ class GlobalConfig:
     gemini_model: str = "gemini-2.5-flash"
     
     letta_enable_filesystem: bool = True
+    
+    # Letta server configuration
+    letta_server_mode: str = "subprocess"  # subprocess, docker, external
+    letta_server_host: str = "localhost"
+    letta_server_port: int = 8283
+    letta_server_auto_start: bool = True
+    letta_server_health_check_interval: int = 30
+    letta_server_startup_timeout: int = 60
 
 
 class Settings:
@@ -136,6 +144,16 @@ class Settings:
         if "letta" in config_data:
             letta_config = config_data["letta"]
             config.letta_enable_filesystem = letta_config.get("enable_filesystem", config.letta_enable_filesystem)
+            
+            # Letta server configuration
+            if "server" in letta_config:
+                server_config = letta_config["server"]
+                config.letta_server_mode = server_config.get("mode", config.letta_server_mode)
+                config.letta_server_host = server_config.get("host", config.letta_server_host)
+                config.letta_server_port = server_config.get("port", config.letta_server_port)
+                config.letta_server_auto_start = server_config.get("auto_start", config.letta_server_auto_start)
+                config.letta_server_health_check_interval = server_config.get("health_check_interval", config.letta_server_health_check_interval)
+                config.letta_server_startup_timeout = server_config.get("startup_timeout", config.letta_server_startup_timeout)
         
         return config
     
@@ -170,6 +188,14 @@ model = "{self._global_config.gemini_model}"
 
 [letta]
 enable_filesystem = {str(self._global_config.letta_enable_filesystem).lower()}
+
+[letta.server]
+mode = "{self._global_config.letta_server_mode}"
+host = "{self._global_config.letta_server_host}"
+port = {self._global_config.letta_server_port}
+auto_start = {str(self._global_config.letta_server_auto_start).lower()}
+health_check_interval = {self._global_config.letta_server_health_check_interval}
+startup_timeout = {self._global_config.letta_server_startup_timeout}
 """
         
         with open(self._config_path, "w") as f:

@@ -16,25 +16,32 @@ from datetime import datetime
 import pkg_resources
 
 try:
-    from letta import LocalClient, create_client
-    from letta.schemas.agent import CreateAgent
-    from letta.schemas.memory import ChatMemory
-    from letta.schemas.message import Message
-    from letta.constants import DEFAULT_PRESET
+    from letta_client import AsyncLetta, Letta
+    from letta_client.types import (
+        AgentState,
+        LlmConfig,
+        EmbeddingConfig,
+        MemoryBlock
+    )
     # Get Letta version for compatibility checking
     try:
         LETTA_VERSION = pkg_resources.get_distribution("letta").version
+        LETTA_CLIENT_VERSION = pkg_resources.get_distribution("letta-client").version
     except:
         LETTA_VERSION = "unknown"
+        LETTA_CLIENT_VERSION = "unknown"
 except ImportError:
     # Fallback for older versions or installation issues
-    LocalClient = None
-    create_client = None
+    AsyncLetta = None
+    Letta = None
     LETTA_VERSION = None
-    print("Warning: Letta import failed, using fallback implementation")
+    LETTA_CLIENT_VERSION = None
+    print("Warning: Letta client import failed, using fallback implementation")
 
 from .logging_conf import get_logger
 from .models import KnowledgeItem, SourceChunk
+from .letta_server import server_manager
+from .letta_config import config_manager, LettaAgentConfig
 
 logger = get_logger(__name__)
 
@@ -50,24 +57,70 @@ class LettaAdapter:
         self.letta_path.mkdir(parents=True, exist_ok=True)
         
         # Letta client and agent
-        self.client = None
-        self.agent_id = None
-        self.agent_state = None
+        self.client: Optional[AsyncLetta] = None
+        self.sync_client: Optional[Letta] = None
+        self.agent_id: Optional[str] = None
+        self.agent_state: Optional[AgentState] = None
+        self.fallback_mode: bool = False
         
         # Check for existing data before initialization
         self._check_existing_data()
         
-        # Initialize agent on startup
-        self._initialize_client()
-        self._initialize_or_load_agent()
+        # Initialize client and agent asynchronously
+        # This will be called when first operation is attempted
+        self._initialized = False
         
         logger.info(
-            "LettaAdapter initialized",
+            "LettaAdapter created (pending initialization)",
             matter_id=self.matter_id,
             matter_name=self.matter_name,
-            letta_path=str(self.letta_path),
-            agent_id=self.agent_id
+            letta_path=str(self.letta_path)
         )
+    
+    async def _ensure_initialized(self) -> bool:
+        """
+        Ensure the adapter is initialized with server connection.
+        
+        Returns:
+            True if initialized successfully, False if in fallback mode
+        """
+        if self._initialized:
+            return not self.fallback_mode
+        
+        try:
+            # Check if server is available
+            if not server_manager._is_running and not server_manager.start():
+                logger.warning("Letta server not available, using fallback mode")
+                self.fallback_mode = True
+                self._initialized = True
+                return False
+            
+            # Initialize client
+            base_url = server_manager.get_base_url()
+            self.client = AsyncLetta(base_url=base_url)
+            self.sync_client = Letta(base_url=base_url)
+            
+            # Test connection
+            await self.client.health.health_check()
+            
+            # Initialize or load agent
+            await self._initialize_or_load_agent_async()
+            
+            self.fallback_mode = False
+            self._initialized = True
+            
+            logger.info(
+                "LettaAdapter initialized successfully",
+                agent_id=self.agent_id,
+                base_url=base_url
+            )
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize LettaAdapter: {e}")
+            self.fallback_mode = True
+            self._initialized = True
+            return False
     
     async def recall(self, query: str, top_k: int = 6) -> List[KnowledgeItem]:
         """
@@ -80,15 +133,19 @@ class LettaAdapter:
         Returns:
             List of relevant KnowledgeItem objects
         """
-        if not self.client or not self.agent_id:
+        # Ensure initialized
+        if not await self._ensure_initialized():
             logger.warning("Letta not available, returning empty memory list")
+            return []
+        
+        if not self.client or not self.agent_id:
             return []
         
         try:
             # Search archival memory for relevant items
-            memory_results = await asyncio.to_thread(
-                self.client.get_archival_memory,
+            memory_results = await self.client.agents.search_archival_memory(
                 agent_id=self.agent_id,
+                query=query,
                 limit=top_k * 2  # Get more than needed for filtering
             )
             
@@ -96,7 +153,7 @@ class LettaAdapter:
             for memory_obj in memory_results[:top_k]:
                 # Parse memory content as JSON knowledge item
                 try:
-                    content = memory_obj.text
+                    content = memory_obj.memory if hasattr(memory_obj, 'memory') else str(memory_obj)
                     if content.startswith('{') and content.endswith('}'):
                         # Parse JSON knowledge item
                         item_data = json.loads(content)
@@ -150,8 +207,12 @@ class LettaAdapter:
             sources: Source chunks used in the answer
             extracted_facts: Knowledge items extracted from the interaction
         """
-        if not self.client or not self.agent_id:
+        # Ensure initialized
+        if not await self._ensure_initialized():
             logger.warning("Letta not available, skipping interaction storage")
+            return
+        
+        if not self.client or not self.agent_id:
             return
         
         try:
@@ -169,8 +230,7 @@ class LettaAdapter:
             }
             
             # Store interaction summary
-            await asyncio.to_thread(
-                self.client.insert_archival_memory,
+            await self.client.agents.insert_archival_memory(
                 agent_id=self.agent_id,
                 memory=json.dumps(interaction_summary)
             )
@@ -187,8 +247,7 @@ class LettaAdapter:
                     "extracted_from": timestamp
                 }
                 
-                await asyncio.to_thread(
-                    self.client.insert_archival_memory,
+                await self.client.agents.insert_archival_memory(
                     agent_id=self.agent_id,
                     memory=json.dumps(fact_data)
                 )
@@ -198,11 +257,19 @@ class LettaAdapter:
                 recent_facts = ", ".join([f"{fact.type}: {fact.label}" for fact in extracted_facts[:3]])
                 core_update = f"Recent discussion: {user_query[:100]}... Key items: {recent_facts}"
                 
-                # Update persona with recent context
-                await asyncio.to_thread(
-                    self.client.update_agent_core_memory,
+                # Get current agent state to update memory
+                agent = await self.client.agents.get_agent(self.agent_id)
+                
+                # Update memory blocks
+                for block in agent.memory.blocks:
+                    if block.label == "human":
+                        block.value = f"{block.value}\n\nRecent context: {core_update}"
+                        break
+                
+                # Update agent with new memory
+                await self.client.agents.update_agent(
                     agent_id=self.agent_id,
-                    new_memory={"persona": core_update}
+                    memory_blocks=[{"label": b.label, "value": b.value} for b in agent.memory.blocks]
                 )
             
             logger.debug(
@@ -235,8 +302,12 @@ class LettaAdapter:
         Returns:
             List of suggested follow-up questions
         """
-        if not self.client or not self.agent_id:
+        # Ensure initialized
+        if not await self._ensure_initialized():
             logger.warning("Letta not available, returning generic follow-ups")
+            return self._fallback_followups()
+        
+        if not self.client or not self.agent_id:
             return self._fallback_followups()
         
         try:
@@ -255,10 +326,11 @@ Generate 3-4 specific follow-up questions that would help a construction attorne
 Return only the questions, one per line."""
             
             # Send message to agent for follow-up generation
-            response = await asyncio.to_thread(
-                self.client.user_message,
+            response = await self.client.messages.send_message(
                 agent_id=self.agent_id,
-                message=followup_prompt
+                role="user",
+                message=followup_prompt,
+                stream=False
             )
             
             # Parse response to extract follow-up questions
@@ -285,13 +357,16 @@ Return only the questions, one per line."""
     
     async def get_memory_stats(self) -> Dict[str, Any]:
         """Get statistics about agent memory usage."""
+        # Ensure initialized
+        if not await self._ensure_initialized():
+            return {"status": "unavailable", "memory_items": 0}
+        
         if not self.client or not self.agent_id:
             return {"status": "unavailable", "memory_items": 0}
         
         try:
             # Get archival memory count
-            memory_results = await asyncio.to_thread(
-                self.client.get_archival_memory,
+            memory_results = await self.client.agents.get_archival_memory(
                 agent_id=self.agent_id,
                 limit=1000  # Get count estimate
             )
@@ -307,30 +382,7 @@ Return only the questions, one per line."""
             logger.warning("Failed to get memory stats", error=str(e))
             return {"status": "error", "error": str(e)}
     
-    def _initialize_client(self) -> None:
-        """Initialize Letta client with local storage."""
-        try:
-            if LocalClient is None:
-                logger.warning("Letta not available, using fallback mode")
-                return
-            
-            # Use local SQLite storage for privacy
-            config_dir = self.letta_path / "config"
-            config_dir.mkdir(exist_ok=True)
-            
-            # Initialize local client with Matter-specific storage
-            self.client = LocalClient(
-                # Use Matter-specific database path
-                # storage_path=str(config_dir)
-            )
-            
-            logger.debug("Letta client initialized", storage_path=str(config_dir))
-            
-        except Exception as e:
-            logger.error("Failed to initialize Letta client", error=str(e))
-            self.client = None
-    
-    def _initialize_or_load_agent(self) -> None:
+    async def _initialize_or_load_agent_async(self) -> None:
         """Initialize new agent or load existing one for this Matter."""
         if not self.client:
             return
@@ -347,7 +399,7 @@ Return only the questions, one per line."""
                 
                 # Verify agent still exists
                 try:
-                    agent_state = self.client.get_agent(self.agent_id)
+                    agent_state = await self.client.agents.get_agent(self.agent_id)
                     self.agent_state = agent_state
                     logger.debug("Loaded existing agent", agent_id=self.agent_id)
                     return
@@ -356,7 +408,7 @@ Return only the questions, one per line."""
                     self.agent_id = None
             
             # Create new agent
-            self._create_new_agent()
+            await self._create_new_agent_async()
             
             # Save agent configuration with version info
             with open(agent_config_path, 'w') as f:
@@ -365,50 +417,51 @@ Return only the questions, one per line."""
                     'matter_id': self.matter_id,
                     'matter_name': self.matter_name,
                     'created_at': datetime.now().isoformat(),
-                    'letta_version': LETTA_VERSION or 'unknown'
+                    'letta_version': LETTA_VERSION or 'unknown',
+                    'letta_client_version': LETTA_CLIENT_VERSION or 'unknown'
                 }, f, indent=2)
             
         except Exception as e:
             logger.error("Failed to initialize agent", error=str(e))
             self.agent_id = None
     
-    def _create_new_agent(self) -> None:
+    async def _create_new_agent_async(self) -> None:
         """Create new Letta agent with construction domain configuration."""
         try:
-            # Configuration for construction claims analysis
-            persona = f"""
-You are a construction claims analyst assistant for the matter: {self.matter_name}.
-
-Your role is to:
-- Help analyze construction project documents, contracts, and claims
-- Track entities (parties, projects, documents), events (delays, changes, failures), issues (design defects, schedule impacts), and facts
-- Maintain memory of important information from conversations
-- Provide insights about causation, responsibility, and damages
-- Remember key dates, parties, and technical details
-
-You have persistent memory and learn from each conversation to provide better context-aware assistance."""
+            # Get agent configuration from config manager
+            agent_config = config_manager.get_agent_config(
+                matter_name=self.matter_name,
+                llm_provider="ollama",
+                llm_model="gpt-oss:20b"
+            )
             
-            human_description = f"""
-This is a construction attorney working on the matter: {self.matter_name}.
-They are analyzing claims, documents, and seeking legal insights about construction disputes.
-Help them by remembering important facts and providing contextual analysis."""
+            # Create LLM configuration
+            llm_config = LlmConfig(
+                model=agent_config.llm_model,
+                model_endpoint_type=agent_config.llm_provider,
+                model_endpoint=agent_config.llm_endpoint,
+                context_window=agent_config.context_window,
+                max_tokens=agent_config.max_tokens,
+                temperature=agent_config.temperature
+            )
             
-            # Create agent with construction-specific memory
-            agent_name = f"Construction-Claims-{self.matter_id[:8]}"
+            # Create embedding configuration
+            embedding_config = EmbeddingConfig(
+                embedding_model=agent_config.embedding_model,
+                embedding_endpoint_type=agent_config.embedding_provider,
+                embedding_endpoint=agent_config.embedding_endpoint,
+                embedding_dim=agent_config.embedding_dim
+            )
             
-            # Try to create agent (API may vary by Letta version)
-            try:
-                agent_state = self.client.create_agent(
-                    name=agent_name,
-                    persona=persona,
-                    human=human_description
-                )
-            except TypeError:
-                # Fallback for different API signature
-                agent_state = self.client.create_agent(
-                    name=agent_name,
-                    memory=ChatMemory(persona=persona, human=human_description)
-                )
+            # Create agent
+            agent_state = await self.client.agents.create_agent(
+                name=agent_config.name,
+                description=f"Construction claims analyst for {self.matter_name}",
+                system=agent_config.system_prompt,
+                llm_config=llm_config,
+                embedding_config=embedding_config,
+                memory_blocks=agent_config.memory_blocks
+            )
             
             self.agent_id = agent_state.id
             self.agent_state = agent_state
