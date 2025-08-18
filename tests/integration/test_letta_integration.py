@@ -146,7 +146,369 @@ This resulted in differential settlement and structural damage requiring complet
                 text="Differential settlement measurements show 2.5 inch variance across foundation",
                 score=0.82
             )
-        ]\n        \n        extracted_facts = [\n            KnowledgeItem(\n                type="Issue",\n                label="Inadequate soil analysis",\n                date="2022-03-15",\n                actors=["Geotechnical Engineer", "Design Team"],\n                doc_refs=[{"doc": "Geotechnical_Report_2022.pdf", "page": 5}],\n                support_snippet="Soil samples taken at insufficient depth"\n            ),\n            KnowledgeItem(\n                type="Event",\n                label="Foundation failure Building A",\n                date="2023-02-14",\n                actors=["ABC Construction", "Owner"],\n                doc_refs=[{"doc": "Foundation_Inspection_2023.pdf", "page": 12}],\n                support_snippet="Differential settlement of 2.5 inches observed"\n            )\n        ]\n        \n        # Step 1: Store interaction\n        await adapter.upsert_interaction(\n            user_query=user_query,\n            llm_answer=llm_answer,\n            sources=sources,\n            extracted_facts=extracted_facts\n        )\n        \n        # Step 2: Test immediate recall\n        recalled_items = await adapter.recall("foundation failure", top_k=5)\n        \n        # Should find stored knowledge items\n        assert len(recalled_items) > 0\n        \n        # Look for our stored facts\n        found_issue = any(item.label == "Inadequate soil analysis" for item in recalled_items)\n        found_event = any(item.label == "Foundation failure Building A" for item in recalled_items)\n        \n        # At least one of our facts should be recalled\n        assert found_issue or found_event\n        \n        # Step 3: Test memory stats\n        stats = await adapter.get_memory_stats()\n        assert stats["status"] == "active"\n        assert stats["memory_items"] > 0\n        assert stats["agent_id"] == adapter.agent_id\n    \n    @pytest.mark.asyncio\n    @pytest.mark.integration\n    async def test_matter_isolation_verification(self, sample_matters):\n        """Test that memory is completely isolated between matters."""\n        matter1, matter2 = sample_matters\n        \n        adapter1 = LettaAdapter(\n            matter_path=matter1.paths.root,\n            matter_name=matter1.name,\n            matter_id=matter1.id\n        )\n        \n        adapter2 = LettaAdapter(\n            matter_path=matter2.paths.root,\n            matter_name=matter2.name,\n            matter_id=matter2.id\n        )\n        \n        if not (adapter1.client and adapter1.agent_id and adapter2.client and adapter2.agent_id):\n            pytest.skip("Letta not available for integration testing")\n        \n        # Store different facts in each matter\n        foundation_facts = [\n            KnowledgeItem(\n                type="Event",\n                label="Foundation failure",\n                date="2023-02-14",\n                actors=["ABC Construction"],\n                support_snippet="Foundation showed differential settlement"\n            )\n        ]\n        \n        roof_facts = [\n            KnowledgeItem(\n                type="Event",\n                label="Roof membrane failure",\n                date="2023-03-10",\n                actors=["XYZ Roofing"],\n                support_snippet="EPDM membrane developed tears"\n            )\n        ]\n        \n        # Store foundation facts in matter 1\n        await adapter1.upsert_interaction(\n            user_query="What happened to the foundation?",\n            llm_answer="The foundation failed due to differential settlement.",\n            sources=[],\n            extracted_facts=foundation_facts\n        )\n        \n        # Store roof facts in matter 2\n        await adapter2.upsert_interaction(\n            user_query="What happened to the roof?",\n            llm_answer="The roof membrane failed and developed tears.",\n            sources=[],\n            extracted_facts=roof_facts\n        )\n        \n        # Test isolation: recall from matter 1 should not return matter 2 facts\n        matter1_recall = await adapter1.recall("roof membrane", top_k=10)\n        matter2_recall = await adapter2.recall("foundation failure", top_k=10)\n        \n        # Matter 1 should not have roof facts\n        roof_labels = [item.label for item in matter1_recall]\n        assert not any("roof" in label.lower() for label in roof_labels)\n        \n        # Matter 2 should not have foundation facts\n        foundation_labels = [item.label for item in matter2_recall]\n        assert not any("foundation" in label.lower() for label in foundation_labels)\n        \n        # Verify each matter can recall its own facts\n        matter1_foundation_recall = await adapter1.recall("foundation", top_k=10)\n        matter2_roof_recall = await adapter2.recall("roof", top_k=10)\n        \n        foundation_found = any("foundation" in item.label.lower() for item in matter1_foundation_recall)\n        roof_found = any("roof" in item.label.lower() for item in matter2_roof_recall)\n        \n        assert foundation_found  # Matter 1 should find foundation facts\n        assert roof_found       # Matter 2 should find roof facts\n    \n    @pytest.mark.asyncio\n    @pytest.mark.integration \n    async def test_rag_engine_letta_integration(self, sample_matters):\n        """Test RAG engine integration with Letta memory."""\n        matter1, _ = sample_matters\n        \n        # Create RAG engine which should initialize Letta automatically\n        try:\n            rag_engine = RAGEngine(matter=matter1)\n        except Exception as e:\n            pytest.skip(f"Failed to initialize RAG engine: {e}")\n        \n        if not rag_engine.letta_adapter or not rag_engine.letta_adapter.agent_id:\n            pytest.skip("Letta not available in RAG engine")\n        \n        # First, store some knowledge via manual interaction\n        await rag_engine.letta_adapter.upsert_interaction(\n            user_query="Tell me about the project timeline",\n            llm_answer="The project was originally scheduled for 18 months but experienced delays due to foundation issues.",\n            sources=[],\n            extracted_facts=[\n                KnowledgeItem(\n                    type="Event",\n                    label="Project schedule delay",\n                    date="2023-03-01",\n                    actors=["General Contractor", "Owner"],\n                    support_snippet="18-month project delayed due to foundation issues"\n                )\n            ]\n        )\n        \n        # Now test that RAG engine can recall this information\n        # Note: This requires vector store to have some content\n        # For full integration, we'd need to set up vector store with actual documents\n        \n        memory_stats = await rag_engine.letta_adapter.get_memory_stats()\n        assert memory_stats[\"status\"] == \"active\"\n        assert memory_stats[\"memory_items\"] > 0\n    \n    @pytest.mark.asyncio\n    @pytest.mark.integration\n    async def test_followup_generation_with_memory(self, sample_matters):\n        """Test that follow-up generation uses stored memory context."""\n        matter1, _ = sample_matters\n        \n        adapter = LettaAdapter(\n            matter_path=matter1.paths.root,\n            matter_name=matter1.name,\n            matter_id=matter1.id\n        )\n        \n        if not adapter.client or not adapter.agent_id:\n            pytest.skip("Letta not available for integration testing")\n        \n        # Store some context about foundation issues\n        await adapter.upsert_interaction(\n            user_query="What are the main foundation problems?",\n            llm_answer="The main foundation problems include differential settlement, inadequate soil analysis, and design deficiencies.",\n            sources=[],\n            extracted_facts=[\n                KnowledgeItem(\n                    type="Issue",\n                    label="Differential settlement",\n                    support_snippet="Foundation experienced uneven settling"\n                ),\n                KnowledgeItem(\n                    type="Issue", \n                    label="Inadequate soil analysis",\n                    support_snippet="Geotechnical investigation was insufficient"\n                )\n            ]\n        )\n        \n        # Generate follow-ups - should be contextually aware\n        followups = await adapter.suggest_followups(\n            user_query="How much will the foundation repairs cost?",\n            llm_answer="Foundation repairs are estimated at $250,000 including excavation, soil stabilization, and reconstruction."\n        )\n        \n        # Should return contextual follow-ups\n        assert len(followups) > 0\n        assert all(isinstance(f, str) for f in followups)\n        assert all(len(f) <= 150 for f in followups)  # Reasonable length\n        \n        # At least some should be questions (end with ?)\n        question_count = sum(1 for f in followups if f.endswith('?'))\n        assert question_count > 0\n    \n    @pytest.mark.asyncio\n    @pytest.mark.integration\n    async def test_agent_persistence_across_sessions(self, sample_matters):\n        """Test that agent state persists across adapter instances."""\n        matter1, _ = sample_matters\n        \n        # Create first adapter instance\n        adapter1 = LettaAdapter(\n            matter_path=matter1.paths.root,\n            matter_name=matter1.name,\n            matter_id=matter1.id\n        )\n        \n        if not adapter1.client or not adapter1.agent_id:\n            pytest.skip("Letta not available for integration testing")\n        \n        original_agent_id = adapter1.agent_id\n        \n        # Store some knowledge\n        await adapter1.upsert_interaction(\n            user_query="What is the project status?",\n            llm_answer="The project is currently delayed due to foundation issues.",\n            sources=[],\n            extracted_facts=[\n                KnowledgeItem(\n                    type="Fact",\n                    label="Project currently delayed",\n                    support_snippet="Foundation issues causing project delays"\n                )\n            ]\n        )\n        \n        # Create second adapter instance (simulating app restart)\n        adapter2 = LettaAdapter(\n            matter_path=matter1.paths.root,\n            matter_name=matter1.name,\n            matter_id=matter1.id\n        )\n        \n        # Should load the same agent\n        assert adapter2.agent_id == original_agent_id\n        \n        # Should be able to recall previously stored information\n        recalled = await adapter2.recall("project delay", top_k=5)\n        \n        # Should find our previously stored fact\n        found_delay_fact = any("delayed" in item.label.lower() for item in recalled)\n        assert found_delay_fact\n    \n    @pytest.mark.asyncio\n    @pytest.mark.integration\n    async def test_large_memory_handling(self, sample_matters):\n        """Test handling of large amounts of memory data."""\n        matter1, _ = sample_matters\n        \n        adapter = LettaAdapter(\n            matter_path=matter1.paths.root,\n            matter_name=matter1.name,\n            matter_id=matter1.id\n        )\n        \n        if not adapter.client or not adapter.agent_id:\n            pytest.skip("Letta not available for integration testing")\n        \n        # Store multiple interactions with various knowledge items\n        for i in range(5):\n            facts = [\n                KnowledgeItem(\n                    type="Event",\n                    label=f"Event {i}: Construction milestone",\n                    date=f"2023-0{i+1}-15",\n                    actors=["Contractor", "Owner"],\n                    support_snippet=f"Milestone {i} completed on schedule"\n                ),\n                KnowledgeItem(\n                    type="Issue", \n                    label=f"Issue {i}: Quality concern",\n                    date=f"2023-0{i+1}-20",\n                    actors=["QC Inspector"],\n                    support_snippet=f"Quality issue {i} identified and resolved"\n                )\n            ]\n            \n            await adapter.upsert_interaction(\n                user_query=f"What happened in month {i+1}?",\n                llm_answer=f"In month {i+1}, we completed milestone {i} but identified quality issue {i}.",\n                sources=[],\n                extracted_facts=facts\n            )\n        \n        # Test recall with various queries\n        event_recall = await adapter.recall("construction milestone", top_k=8)\n        issue_recall = await adapter.recall("quality concern", top_k=8)\n        \n        # Should find multiple relevant items\n        assert len(event_recall) > 0\n        assert len(issue_recall) > 0\n        \n        # Verify memory stats reflect the stored data\n        stats = await adapter.get_memory_stats()\n        assert stats["memory_items"] >= 10  # At least our 10 facts + interaction summaries\n    \n    @pytest.mark.asyncio\n    @pytest.mark.integration\n    async def test_error_recovery_and_resilience(self, sample_matters):\n        """Test adapter resilience to various error conditions."""\n        matter1, _ = sample_matters\n        \n        adapter = LettaAdapter(\n            matter_path=matter1.paths.root,\n            matter_name=matter1.name,\n            matter_id=matter1.id\n        )\n        \n        # Test operations when Letta is unavailable\n        if not adapter.client:\n            # Should handle gracefully without errors\n            recall_result = await adapter.recall("test query", top_k=5)\n            assert recall_result == []\n            \n            await adapter.upsert_interaction("test", "test", [], [])\n            # Should not raise exception\n            \n            followups = await adapter.suggest_followups("test", "test")\n            assert len(followups) == 4  # Fallback suggestions\n            \n            stats = await adapter.get_memory_stats()\n            assert stats["status"] == "unavailable"\n        \n        # Test with malformed data\n        if adapter.client and adapter.agent_id:\n            # Should handle malformed knowledge items gracefully\n            malformed_facts = [\n                KnowledgeItem(\n                    type="Event",\n                    label="",  # Empty label\n                    support_snippet="Test snippet"\n                )\n            ]\n            \n            # Should not raise exception\n            await adapter.upsert_interaction(\n                user_query="test",\n                llm_answer="test",\n                sources=[],\n                extracted_facts=malformed_facts\n            )
+        ]
+        
+        extracted_facts = [
+            KnowledgeItem(
+                type="Issue",
+                label="Inadequate soil analysis",
+                date="2022-03-15",
+                actors=["Geotechnical Engineer", "Design Team"],
+                doc_refs=[{"doc": "Geotechnical_Report_2022.pdf", "page": 5}],
+                support_snippet="Soil samples taken at insufficient depth"
+            ),
+            KnowledgeItem(
+                type="Event",
+                label="Foundation failure Building A",
+                date="2023-02-14",
+                actors=["ABC Construction", "Owner"],
+                doc_refs=[{"doc": "Foundation_Inspection_2023.pdf", "page": 12}],
+                support_snippet="Differential settlement of 2.5 inches observed"
+            )
+        ]
+        
+        # Step 1: Store interaction
+        await adapter.upsert_interaction(
+            user_query=user_query,
+            llm_answer=llm_answer,
+            sources=sources,
+            extracted_facts=extracted_facts
+        )
+        
+        # Step 2: Test immediate recall
+        recalled_items = await adapter.recall("foundation failure", top_k=5)
+        
+        # Should find stored knowledge items
+        assert len(recalled_items) > 0
+        
+        # Look for our stored facts
+        found_issue = any(item.label == "Inadequate soil analysis" for item in recalled_items)
+        found_event = any(item.label == "Foundation failure Building A" for item in recalled_items)
+        
+        # At least one of our facts should be recalled
+        assert found_issue or found_event
+        
+        # Step 3: Test memory stats
+        stats = await adapter.get_memory_stats()
+        assert stats["status"] == "active"
+        assert stats["memory_items"] > 0
+        assert stats["agent_id"] == adapter.agent_id
+    
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_matter_isolation_verification(self, sample_matters):
+        """Test that memory is completely isolated between matters."""
+        matter1, matter2 = sample_matters
+        
+        adapter1 = LettaAdapter(
+            matter_path=matter1.paths.root,
+            matter_name=matter1.name,
+            matter_id=matter1.id
+        )
+        
+        adapter2 = LettaAdapter(
+            matter_path=matter2.paths.root,
+            matter_name=matter2.name,
+            matter_id=matter2.id
+        )
+        
+        if not (adapter1.client and adapter1.agent_id and adapter2.client and adapter2.agent_id):
+            pytest.skip("Letta not available for integration testing")
+        
+        # Store different facts in each matter
+        foundation_facts = [
+            KnowledgeItem(
+                type="Event",
+                label="Foundation failure",
+                date="2023-02-14",
+                actors=["ABC Construction"],
+                support_snippet="Foundation showed differential settlement"
+            )
+        ]
+        
+        roof_facts = [
+            KnowledgeItem(
+                type="Event",
+                label="Roof membrane failure",
+                date="2023-03-10",
+                actors=["XYZ Roofing"],
+                support_snippet="EPDM membrane developed tears"
+            )
+        ]
+        
+        # Store foundation facts in matter 1
+        await adapter1.upsert_interaction(
+            user_query="What happened to the foundation?",
+            llm_answer="The foundation failed due to differential settlement.",
+            sources=[],
+            extracted_facts=foundation_facts
+        )
+        
+        # Store roof facts in matter 2
+        await adapter2.upsert_interaction(
+            user_query="What happened to the roof?",
+            llm_answer="The roof membrane failed and developed tears.",
+            sources=[],
+            extracted_facts=roof_facts
+        )
+        
+        # Test isolation: recall from matter 1 should not return matter 2 facts
+        matter1_recall = await adapter1.recall("roof membrane", top_k=10)
+        matter2_recall = await adapter2.recall("foundation failure", top_k=10)
+        
+        # Matter 1 should not have roof facts
+        roof_labels = [item.label for item in matter1_recall]
+        assert not any("roof" in label.lower() for label in roof_labels)
+        
+        # Matter 2 should not have foundation facts
+        foundation_labels = [item.label for item in matter2_recall]
+        assert not any("foundation" in label.lower() for label in foundation_labels)
+        
+        # Verify each matter can recall its own facts
+        matter1_foundation_recall = await adapter1.recall("foundation", top_k=10)
+        matter2_roof_recall = await adapter2.recall("roof", top_k=10)
+        
+        foundation_found = any("foundation" in item.label.lower() for item in matter1_foundation_recall)
+        roof_found = any("roof" in item.label.lower() for item in matter2_roof_recall)
+        
+        assert foundation_found  # Matter 1 should find foundation facts
+        assert roof_found       # Matter 2 should find roof facts
+    
+    @pytest.mark.asyncio
+    @pytest.mark.integration 
+    async def test_rag_engine_letta_integration(self, sample_matters):
+        """Test RAG engine integration with Letta memory."""
+        matter1, _ = sample_matters
+        
+        # Create RAG engine which should initialize Letta automatically
+        try:
+            rag_engine = RAGEngine(matter=matter1)
+        except Exception as e:
+            pytest.skip(f"Failed to initialize RAG engine: {e}")
+        
+        if not rag_engine.letta_adapter or not rag_engine.letta_adapter.agent_id:
+            pytest.skip("Letta not available in RAG engine")
+        
+        # First, store some knowledge via manual interaction
+        await rag_engine.letta_adapter.upsert_interaction(
+            user_query="Tell me about the project timeline",
+            llm_answer="The project was originally scheduled for 18 months but experienced delays due to foundation issues.",
+            sources=[],
+            extracted_facts=[
+                KnowledgeItem(
+                    type="Event",
+                    label="Project schedule delay",
+                    date="2023-03-01",
+                    actors=["General Contractor", "Owner"],
+                    support_snippet="18-month project delayed due to foundation issues"
+                )
+            ]
+        )
+        
+        # Now test that RAG engine can recall this information
+        # Note: This requires vector store to have some content
+        # For full integration, we'd need to set up vector store with actual documents
+        
+        memory_stats = await rag_engine.letta_adapter.get_memory_stats()
+        assert memory_stats["status"] == "active"
+        assert memory_stats["memory_items"] > 0
+    
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_followup_generation_with_memory(self, sample_matters):
+        """Test that follow-up generation uses stored memory context."""
+        matter1, _ = sample_matters
+        
+        adapter = LettaAdapter(
+            matter_path=matter1.paths.root,
+            matter_name=matter1.name,
+            matter_id=matter1.id
+        )
+        
+        if not adapter.client or not adapter.agent_id:
+            pytest.skip("Letta not available for integration testing")
+        
+        # Store some context about foundation issues
+        await adapter.upsert_interaction(
+            user_query="What are the main foundation problems?",
+            llm_answer="The main foundation problems include differential settlement, inadequate soil analysis, and design deficiencies.",
+            sources=[],
+            extracted_facts=[
+                KnowledgeItem(
+                    type="Issue",
+                    label="Differential settlement",
+                    support_snippet="Foundation experienced uneven settling"
+                ),
+                KnowledgeItem(
+                    type="Issue", 
+                    label="Inadequate soil analysis",
+                    support_snippet="Geotechnical investigation was insufficient"
+                )
+            ]
+        )
+        
+        # Generate follow-ups - should be contextually aware
+        followups = await adapter.suggest_followups(
+            user_query="How much will the foundation repairs cost?",
+            llm_answer="Foundation repairs are estimated at $250,000 including excavation, soil stabilization, and reconstruction."
+        )
+        
+        # Should return contextual follow-ups
+        assert len(followups) > 0
+        assert all(isinstance(f, str) for f in followups)
+        assert all(len(f) <= 150 for f in followups)  # Reasonable length
+        
+        # At least some should be questions (end with ?)
+        question_count = sum(1 for f in followups if f.endswith('?'))
+        assert question_count > 0
+    
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_agent_persistence_across_sessions(self, sample_matters):
+        """Test that agent state persists across adapter instances."""
+        matter1, _ = sample_matters
+        
+        # Create first adapter instance
+        adapter1 = LettaAdapter(
+            matter_path=matter1.paths.root,
+            matter_name=matter1.name,
+            matter_id=matter1.id
+        )
+        
+        if not adapter1.client or not adapter1.agent_id:
+            pytest.skip("Letta not available for integration testing")
+        
+        original_agent_id = adapter1.agent_id
+        
+        # Store some knowledge
+        await adapter1.upsert_interaction(
+            user_query="What is the project status?",
+            llm_answer="The project is currently delayed due to foundation issues.",
+            sources=[],
+            extracted_facts=[
+                KnowledgeItem(
+                    type="Fact",
+                    label="Project currently delayed",
+                    support_snippet="Foundation issues causing project delays"
+                )
+            ]
+        )
+        
+        # Create second adapter instance (simulating app restart)
+        adapter2 = LettaAdapter(
+            matter_path=matter1.paths.root,
+            matter_name=matter1.name,
+            matter_id=matter1.id
+        )
+        
+        # Should load the same agent
+        assert adapter2.agent_id == original_agent_id
+        
+        # Should be able to recall previously stored information
+        recalled = await adapter2.recall("project delay", top_k=5)
+        
+        # Should find our previously stored fact
+        found_delay_fact = any("delayed" in item.label.lower() for item in recalled)
+        assert found_delay_fact
+    
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_large_memory_handling(self, sample_matters):
+        """Test handling of large amounts of memory data."""
+        matter1, _ = sample_matters
+        
+        adapter = LettaAdapter(
+            matter_path=matter1.paths.root,
+            matter_name=matter1.name,
+            matter_id=matter1.id
+        )
+        
+        if not adapter.client or not adapter.agent_id:
+            pytest.skip("Letta not available for integration testing")
+        
+        # Store multiple interactions with various knowledge items
+        for i in range(5):
+            facts = [
+                KnowledgeItem(
+                    type="Event",
+                    label=f"Event {i}: Construction milestone",
+                    date=f"2023-0{i+1}-15",
+                    actors=["Contractor", "Owner"],
+                    support_snippet=f"Milestone {i} completed on schedule"
+                ),
+                KnowledgeItem(
+                    type="Issue", 
+                    label=f"Issue {i}: Quality concern",
+                    date=f"2023-0{i+1}-20",
+                    actors=["QC Inspector"],
+                    support_snippet=f"Quality issue {i} identified and resolved"
+                )
+            ]
+            
+            await adapter.upsert_interaction(
+                user_query=f"What happened in month {i+1}?",
+                llm_answer=f"In month {i+1}, we completed milestone {i} but identified quality issue {i}.",
+                sources=[],
+                extracted_facts=facts
+            )
+        
+        # Test recall with various queries
+        event_recall = await adapter.recall("construction milestone", top_k=8)
+        issue_recall = await adapter.recall("quality concern", top_k=8)
+        
+        # Should find multiple relevant items
+        assert len(event_recall) > 0
+        assert len(issue_recall) > 0
+        
+        # Verify memory stats reflect the stored data
+        stats = await adapter.get_memory_stats()
+        assert stats["memory_items"] >= 10  # At least our 10 facts + interaction summaries
+    
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_error_recovery_and_resilience(self, sample_matters):
+        """Test adapter resilience to various error conditions."""
+        matter1, _ = sample_matters
+        
+        adapter = LettaAdapter(
+            matter_path=matter1.paths.root,
+            matter_name=matter1.name,
+            matter_id=matter1.id
+        )
+        
+        # Test operations when Letta is unavailable
+        if not adapter.client:
+            # Should handle gracefully without errors
+            recall_result = await adapter.recall("test query", top_k=5)
+            assert recall_result == []
+            
+            await adapter.upsert_interaction("test", "test", [], [])
+            # Should not raise exception
+            
+            followups = await adapter.suggest_followups("test", "test")
+            assert len(followups) == 4  # Fallback suggestions
+            
+            stats = await adapter.get_memory_stats()
+            assert stats["status"] == "unavailable"
+        
+        # Test with malformed data
+        if adapter.client and adapter.agent_id:
+            # Should handle malformed knowledge items gracefully
+            malformed_facts = [
+                KnowledgeItem(
+                    type="Event",
+                    label="",  # Empty label
+                    support_snippet="Test snippet"
+                )
+            ]
+            
+            # Should not raise exception
+            await adapter.upsert_interaction(
+                user_query="test",
+                llm_answer="test",
+                sources=[],
+                extracted_facts=malformed_facts
+            )
 
 
 if __name__ == "__main__":

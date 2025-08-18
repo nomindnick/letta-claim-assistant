@@ -14,7 +14,7 @@ import threading
 import time
 import concurrent.futures
 
-from app.matters import matter_service
+from app.matters import matter_manager as matter_service
 from app.vectors import VectorStore
 from app.rag import RAGEngine
 from app.chat_history import ChatHistoryManager

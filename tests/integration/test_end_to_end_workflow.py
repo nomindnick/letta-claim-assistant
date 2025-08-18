@@ -14,7 +14,7 @@ from unittest.mock import patch, Mock, AsyncMock
 import json
 import time
 
-from app.matters import matter_service
+from app.matters import matter_manager as matter_service
 from app.ingest import IngestionPipeline
 from app.vectors import VectorStore
 from app.rag import RAGEngine
