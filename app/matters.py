@@ -376,6 +376,77 @@ class MatterManager:
             pass  # Vector store not available
         
         return doc_info
+    
+    async def delete_matter(self, matter_id: str) -> bool:
+        """
+        Delete a matter and all associated data including Letta agent.
+        
+        Args:
+            matter_id: ID of the matter to delete
+            
+        Returns:
+            True if deletion successful, False otherwise
+        """
+        import shutil
+        import asyncio
+        
+        matter = self.get_matter_by_id(matter_id)
+        if not matter:
+            logger.warning(f"Matter not found for deletion: {matter_id}")
+            return False
+        
+        try:
+            # Delete Letta agent if it exists
+            try:
+                from .letta_adapter import LettaAdapter
+                letta_adapter = LettaAdapter(
+                    matter_path=matter.paths.root,
+                    matter_name=matter.name,
+                    matter_id=matter.id
+                )
+                
+                # Delete agent asynchronously
+                if asyncio.iscoroutinefunction(letta_adapter.delete_agent):
+                    # If called from async context
+                    await letta_adapter.delete_agent()
+                else:
+                    # If called from sync context, run in event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(letta_adapter.delete_agent())
+                    finally:
+                        loop.close()
+                
+                logger.info(f"Deleted Letta agent for matter {matter_id}")
+            except Exception as e:
+                logger.warning(f"Could not delete Letta agent: {e}")
+                # Continue with matter deletion even if agent deletion fails
+            
+            # Delete matter directory and all contents
+            if matter.paths.root.exists():
+                shutil.rmtree(matter.paths.root)
+                logger.info(f"Deleted matter directory: {matter.paths.root}")
+            
+            # Clear from current matter if it was selected
+            if self._current_matter and self._current_matter.id == matter_id:
+                self._current_matter = None
+            
+            logger.info(
+                "Matter deleted successfully",
+                matter_id=matter_id,
+                matter_name=matter.name,
+                matter_slug=matter.slug
+            )
+            return True
+            
+        except Exception as e:
+            logger.error(
+                "Failed to delete matter",
+                matter_id=matter_id,
+                error=str(e)
+            )
+            return False
 
 
 # Global matter manager instance

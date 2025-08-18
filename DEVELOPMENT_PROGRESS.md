@@ -28,6 +28,7 @@
 | **L0** | **Completed** | 2025-08-18 | 0.5h | **Letta data migration check** |
 | **L1** | **Completed** | 2025-08-18 | 1h | **Letta server infrastructure** |
 | **L2** | **Completed** | 2025-08-18 | 1h | **Client connection & fallback** |
+| **L3** | **Completed** | 2025-08-18 | 1.5h | **Agent lifecycle management** |
 
 ---
 
@@ -1588,6 +1589,82 @@ The Letta Construction Claim Assistant is a production-ready desktop application
 - Connection infrastructure provides reliable foundation
 - Health monitoring ensures agent operations have valid connection
 - Metrics collection ready for agent operation tracking
+
+### Sprint L3: Agent Lifecycle Management (Completed 2025-08-18, 1.5h)
+
+**Implementation Summary:**
+- Added comprehensive agent lifecycle methods (update, delete, reload, state)
+- Implemented migration support for old LocalClient agents
+- Created backup and restore capabilities for agent data
+- Integrated agent deletion with matter deletion
+- Added agent state persistence and metadata tracking
+- Built robust error handling and recovery mechanisms
+- Implemented version compatibility checking
+
+**Key Technical Decisions:**
+- All lifecycle methods use connection manager for retry and metrics
+- Agent configuration stored locally for recovery
+- Backup includes both local config and server memory export
+- Migration preserves existing memory from SQLite databases
+- Deletion cleans up both server and local data
+- State tracking includes connection status and memory stats
+
+**Files Updated:**
+- `app/letta_adapter.py` - Added 8 new lifecycle methods (~400 lines added)
+  - `update_agent()` - Update agent configuration
+  - `delete_agent()` - Delete agent and clean up data
+  - `reload_agent()` - Refresh agent state from server
+  - `get_agent_state()` - Get current agent state and metadata
+  - `detect_old_agents()` - Check for LocalClient data
+  - `migrate_agent()` - Migrate old agent data
+  - `backup_agent()` - Create agent backup
+  - `restore_agent()` - Restore from backup
+  - `_cleanup_local_data()` - Clean up local files
+- `app/matters.py` - Added `delete_matter()` method with agent cleanup (~70 lines)
+- Created `test_letta_lifecycle.py` - Comprehensive lifecycle test script
+
+**Key Implementation Features:**
+- **Configuration Updates:** Support for LLM model, temperature, prompts
+- **Clean Deletion:** Removes agent from server and local filesystem
+- **State Persistence:** Tracks creation time, updates, versions
+- **Migration Support:** Detects and migrates LocalClient SQLite data
+- **Backup System:** JSON export of memory with timestamp
+- **Matter Integration:** Automatic agent deletion on matter deletion
+- **Fallback Handling:** Operations work gracefully when server unavailable
+
+**Acceptance Criteria Met:**
+- ✅ Each matter has isolated agent
+- ✅ Agents persist across restarts (via agent_config.json)
+- ✅ Agent configuration respects matter settings
+- ✅ Old agents detected and migration offered
+- ✅ Agent creation errors handled gracefully
+- ✅ Agent metadata stored locally
+
+**Testing Results:**
+- All lifecycle operations tested successfully
+- Backup and restore working correctly
+- Migration detection functioning
+- Matter deletion properly cleans up agents
+- Fallback mode handles missing server gracefully
+- State tracking accurate across operations
+
+**Issues Encountered:**
+- Letta client import warning shown (expected in fallback mode)
+- Server method name was _is_running not is_running (fixed)
+- delete_agent needs to handle both async and sync contexts
+
+**Integration Points:**
+- Matter deletion now calls agent deletion
+- Agent state available through get_agent_state()
+- Backup/restore enables data preservation
+- Migration path from old LocalClient available
+- Version tracking for compatibility checks
+
+**Next Sprint Prep:**
+- Sprint L4 (Memory Operations) ready to proceed
+- Agent lifecycle provides stable foundation
+- Backup/restore enables safe experimentation
+- Migration support ensures data preservation
 
 ---
 
