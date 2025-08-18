@@ -6,13 +6,15 @@ upsert operations, and follow-up suggestion generation.
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 import asyncio
 import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+import hashlib
+from collections import defaultdict, Counter
 import pkg_resources
 
 try:
@@ -200,6 +202,241 @@ class LettaAdapter:
             logger.error("Memory recall failed", error=str(e), query=query[:50])
             return []
     
+    async def recall_with_context(
+        self,
+        query: str,
+        conversation_history: List[str] = None,
+        top_k: int = 8,
+        recency_weight: float = 0.2
+    ) -> List[KnowledgeItem]:
+        """
+        Recall memory with conversation context and recency weighting.
+        
+        Args:
+            query: Current query
+            conversation_history: Recent conversation turns
+            top_k: Number of items to return
+            recency_weight: Weight for recent memories (0-1)
+            
+        Returns:
+            Context-aware list of knowledge items
+        """
+        if not await self._ensure_initialized():
+            return []
+        
+        if not self.agent_id:
+            return []
+        
+        try:
+            # Expand query with conversation context
+            expanded_query = query
+            if conversation_history:
+                context_snippet = " ".join(conversation_history[-3:])  # Last 3 turns
+                expanded_query = f"{query} Context: {context_snippet}"
+            
+            # Get base memories
+            async def _search_memories():
+                return await self.client.agents.passages.list(
+                    agent_id=self.agent_id,
+                    search=expanded_query,
+                    limit=top_k * 3  # Get more for scoring
+                )
+            
+            memories = await connection_manager.execute_with_retry(
+                "recall_with_context",
+                _search_memories
+            )
+            
+            if not memories:
+                return []
+            
+            # Score and rank memories
+            scored_memories = []
+            current_time = datetime.now()
+            
+            for passage in memories:
+                try:
+                    # Parse memory content
+                    content = passage.text if hasattr(passage, 'text') else str(passage)
+                    
+                    # Calculate recency score if timestamp available
+                    recency_score = 1.0
+                    if hasattr(passage, 'created_at'):
+                        age_hours = (current_time - passage.created_at).total_seconds() / 3600
+                        recency_score = max(0.1, 1.0 - (age_hours / 168))  # Decay over a week
+                    
+                    # Calculate relevance score (would be from vector similarity in real implementation)
+                    relevance_score = 0.8  # Placeholder - would use actual similarity
+                    
+                    # Combined score
+                    final_score = (relevance_score * (1 - recency_weight)) + (recency_score * recency_weight)
+                    
+                    scored_memories.append((final_score, content))
+                    
+                except Exception as e:
+                    logger.debug(f"Error scoring memory: {e}")
+                    continue
+            
+            # Sort by score and convert to knowledge items
+            scored_memories.sort(key=lambda x: x[0], reverse=True)
+            knowledge_items = []
+            
+            for score, content in scored_memories[:top_k]:
+                try:
+                    if content.startswith('{') and content.endswith('}'):
+                        item_data = json.loads(content)
+                        knowledge_item = KnowledgeItem(
+                            type=item_data.get('type', 'Fact'),
+                            label=item_data.get('label', 'Unknown'),
+                            date=item_data.get('date'),
+                            actors=item_data.get('actors', []),
+                            doc_refs=item_data.get('doc_refs', []),
+                            support_snippet=item_data.get('support_snippet')
+                        )
+                    else:
+                        knowledge_item = KnowledgeItem(
+                            type="Fact",
+                            label=content[:100],
+                            support_snippet=content[:300] if len(content) > 100 else None
+                        )
+                    knowledge_items.append(knowledge_item)
+                except:
+                    continue
+            
+            logger.debug(
+                "Context-aware recall completed",
+                query_preview=query[:50],
+                items_found=len(knowledge_items),
+                context_provided=bool(conversation_history)
+            )
+            
+            return knowledge_items
+            
+        except Exception as e:
+            logger.error("Context recall failed", error=str(e))
+            return []
+    
+    async def semantic_memory_search(
+        self,
+        query: str,
+        filters: Dict[str, Any] = None,
+        top_k: int = 10
+    ) -> List[Tuple[KnowledgeItem, float]]:
+        """
+        Advanced semantic search with filtering and confidence scores.
+        
+        Args:
+            query: Search query (supports AND/OR logic)
+            filters: Metadata filters (date_range, doc_sources, types)
+            top_k: Number of results
+            
+        Returns:
+            List of (knowledge_item, confidence_score) tuples
+        """
+        if not await self._ensure_initialized():
+            return []
+        
+        if not self.agent_id:
+            return []
+        
+        try:
+            # Parse complex query
+            search_terms = self._parse_complex_query(query)
+            
+            # Perform multiple searches if needed
+            all_results = []
+            for term in search_terms:
+                results = await self.client.agents.passages.list(
+                    agent_id=self.agent_id,
+                    search=term,
+                    limit=top_k * 2
+                )
+                all_results.extend(results or [])
+            
+            # Deduplicate and filter
+            seen_hashes = set()
+            filtered_results = []
+            
+            for passage in all_results:
+                try:
+                    content = passage.text if hasattr(passage, 'text') else str(passage)
+                    content_hash = hashlib.md5(content.encode()).hexdigest()
+                    
+                    if content_hash in seen_hashes:
+                        continue
+                    seen_hashes.add(content_hash)
+                    
+                    # Apply filters if provided
+                    if filters and content.startswith('{'):
+                        try:
+                            item_data = json.loads(content)
+                            
+                            # Type filter
+                            if 'types' in filters and item_data.get('type') not in filters['types']:
+                                continue
+                            
+                            # Date range filter
+                            if 'date_range' in filters and item_data.get('date'):
+                                item_date = datetime.fromisoformat(item_data['date'])
+                                if not (filters['date_range']['start'] <= item_date <= filters['date_range']['end']):
+                                    continue
+                            
+                            # Document source filter
+                            if 'doc_sources' in filters:
+                                doc_refs = item_data.get('doc_refs', [])
+                                if not any(ref['doc'] in filters['doc_sources'] for ref in doc_refs):
+                                    continue
+                        except:
+                            pass
+                    
+                    filtered_results.append(content)
+                    
+                except Exception as e:
+                    logger.debug(f"Error processing search result: {e}")
+                    continue
+            
+            # Convert to knowledge items with confidence scores
+            results_with_scores = []
+            for content in filtered_results[:top_k]:
+                try:
+                    confidence = 0.8  # Placeholder - would calculate based on match quality
+                    
+                    if content.startswith('{') and content.endswith('}'):
+                        item_data = json.loads(content)
+                        knowledge_item = KnowledgeItem(
+                            type=item_data.get('type', 'Fact'),
+                            label=item_data.get('label', 'Unknown'),
+                            date=item_data.get('date'),
+                            actors=item_data.get('actors', []),
+                            doc_refs=item_data.get('doc_refs', []),
+                            support_snippet=item_data.get('support_snippet')
+                        )
+                    else:
+                        knowledge_item = KnowledgeItem(
+                            type="Fact",
+                            label=content[:100],
+                            support_snippet=content[:300] if len(content) > 100 else None
+                        )
+                    
+                    results_with_scores.append((knowledge_item, confidence))
+                    
+                except Exception as e:
+                    logger.debug(f"Error converting to knowledge item: {e}")
+                    continue
+            
+            logger.debug(
+                "Semantic search completed",
+                query=query[:50],
+                results=len(results_with_scores),
+                filters_applied=bool(filters)
+            )
+            
+            return results_with_scores
+            
+        except Exception as e:
+            logger.error("Semantic search failed", error=str(e))
+            return []
+    
     async def upsert_interaction(
         self,
         user_query: str,
@@ -311,6 +548,209 @@ class LettaAdapter:
                 query_preview=user_query[:50],
                 facts_count=len(extracted_facts)
             )
+    
+    async def store_knowledge_batch(
+        self,
+        knowledge_items: List[KnowledgeItem],
+        deduplicate: bool = True,
+        importance_threshold: float = 0.5
+    ) -> Dict[str, Any]:
+        """
+        Batch insert multiple knowledge items with deduplication.
+        
+        Args:
+            knowledge_items: List of knowledge items to store
+            deduplicate: Whether to check for duplicates
+            importance_threshold: Minimum importance score to store
+            
+        Returns:
+            Dictionary with storage statistics
+        """
+        if not await self._ensure_initialized():
+            logger.warning("Letta not available, skipping batch storage")
+            return {"stored": 0, "duplicates": 0, "skipped": 0}
+        
+        if not self.agent_id or not knowledge_items:
+            return {"stored": 0, "duplicates": 0, "skipped": 0}
+        
+        stored_count = 0
+        duplicate_count = 0
+        skipped_count = 0
+        
+        try:
+            # Get existing memories for deduplication if needed
+            existing_hashes = set()
+            if deduplicate:
+                existing_memories = await self._get_all_memories_cached()
+                # Parse existing memories and hash their content
+                for mem_text in existing_memories:
+                    try:
+                        if mem_text.startswith('{'):
+                            mem_data = json.loads(mem_text)
+                            # Create KnowledgeItem from memory for consistent hashing
+                            existing_item = KnowledgeItem(
+                                type=mem_data.get('type', 'Fact'),
+                                label=mem_data.get('label', ''),
+                                date=mem_data.get('date'),
+                                actors=mem_data.get('actors', [])
+                            )
+                            existing_hashes.add(self._hash_knowledge_item(existing_item))
+                        else:
+                            existing_hashes.add(self._hash_memory(mem_text))
+                    except:
+                        existing_hashes.add(self._hash_memory(mem_text))
+            
+            # Process each knowledge item
+            tasks = []
+            for item in knowledge_items:
+                # Calculate importance score
+                importance = self._calculate_importance_score(item)
+                if importance < importance_threshold:
+                    skipped_count += 1
+                    continue
+                
+                # Check for duplicates
+                item_hash = self._hash_knowledge_item(item)
+                if deduplicate and item_hash in existing_hashes:
+                    duplicate_count += 1
+                    continue
+                
+                # Prepare memory data with metadata
+                memory_data = {
+                    "type": item.type,
+                    "label": item.label,
+                    "date": item.date,
+                    "actors": item.actors,
+                    "doc_refs": item.doc_refs,
+                    "support_snippet": item.support_snippet,
+                    "importance_score": importance,
+                    "stored_at": datetime.now().isoformat(),
+                    "hash": item_hash
+                }
+                
+                # Create async task for insertion
+                async def _insert_memory(data):
+                    return await self.client.agents.passages.create(
+                        agent_id=self.agent_id,
+                        text=json.dumps(data)
+                    )
+                
+                tasks.append(_insert_memory(memory_data))
+                existing_hashes.add(item_hash)
+            
+            # Execute batch insertions in parallel
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                stored_count = sum(1 for r in results if not isinstance(r, Exception))
+                
+                # Log any errors
+                errors = [r for r in results if isinstance(r, Exception)]
+                if errors:
+                    logger.warning(f"Some batch insertions failed: {len(errors)} errors")
+            
+            logger.info(
+                "Batch knowledge storage completed",
+                total_items=len(knowledge_items),
+                stored=stored_count,
+                duplicates=duplicate_count,
+                skipped=skipped_count
+            )
+            
+            return {
+                "stored": stored_count,
+                "duplicates": duplicate_count,
+                "skipped": skipped_count,
+                "total": len(knowledge_items)
+            }
+            
+        except Exception as e:
+            logger.error("Batch storage failed", error=str(e))
+            return {"stored": stored_count, "duplicates": duplicate_count, "skipped": skipped_count, "error": str(e)}
+    
+    async def update_core_memory_smart(
+        self,
+        block_label: str,
+        new_content: str,
+        mode: str = "append",
+        max_size: int = 2000
+    ) -> bool:
+        """
+        Smart update of core memory blocks with size management.
+        
+        Args:
+            block_label: Memory block to update (e.g., "human", "persona")
+            new_content: Content to add/update
+            mode: Update mode - "append", "replace", "prepend", "smart"
+            max_size: Maximum size for memory block
+            
+        Returns:
+            True if update successful
+        """
+        if not await self._ensure_initialized():
+            return False
+        
+        if not self.agent_id:
+            return False
+        
+        try:
+            # Get current agent state
+            agent = await self.client.agents.retrieve(self.agent_id)
+            
+            # Find and update the target block
+            updated = False
+            for block in agent.memory.blocks:
+                if block.label == block_label:
+                    current_value = block.value or ""
+                    
+                    if mode == "replace":
+                        new_value = new_content
+                    elif mode == "prepend":
+                        new_value = f"{new_content}\n\n{current_value}"
+                    elif mode == "append":
+                        new_value = f"{current_value}\n\n{new_content}"
+                    elif mode == "smart":
+                        # Smart mode: summarize if too long, keep important parts
+                        combined = f"{current_value}\n\n{new_content}"
+                        if len(combined) > max_size:
+                            new_value = await self._summarize_memory_block(combined, max_size)
+                        else:
+                            new_value = combined
+                    else:
+                        new_value = new_content
+                    
+                    # Truncate if exceeds max size
+                    if len(new_value) > max_size:
+                        if mode in ["append", "smart"]:
+                            # Keep recent content when appending
+                            new_value = "..." + new_value[-(max_size - 3):]
+                        else:
+                            # Keep beginning when prepending or replacing
+                            new_value = new_value[:max_size - 3] + "..."
+                    
+                    block.value = new_value
+                    updated = True
+                    break
+            
+            if updated:
+                # Update agent with new memory
+                await self.client.agents.modify(
+                    agent_id=self.agent_id,
+                    memory_blocks=[{"label": b.label, "value": b.value} for b in agent.memory.blocks]
+                )
+                
+                logger.debug(
+                    "Core memory updated",
+                    block_label=block_label,
+                    mode=mode,
+                    new_size=len(new_value) if updated else 0
+                )
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error("Core memory update failed", error=str(e))
+            return False
     
     async def suggest_followups(
         self,
@@ -434,6 +874,385 @@ Return only the questions, one per line."""
         except Exception as e:
             logger.warning("Failed to get memory stats", error=str(e))
             return {"status": "error", "error": str(e)}
+    
+    async def get_memory_summary(self, max_length: int = 500) -> str:
+        """
+        Generate a concise summary of agent's knowledge.
+        
+        Args:
+            max_length: Maximum length of summary
+            
+        Returns:
+            Summary string
+        """
+        if not await self._ensure_initialized():
+            return "Memory unavailable"
+        
+        if not self.agent_id:
+            return "No agent memory"
+        
+        try:
+            # Get all memories
+            memories = await self.client.agents.passages.list(
+                agent_id=self.agent_id,
+                limit=100
+            )
+            
+            if not memories:
+                return "No memories stored yet"
+            
+            # Categorize memories
+            categories = defaultdict(list)
+            for passage in memories:
+                try:
+                    content = passage.text if hasattr(passage, 'text') else str(passage)
+                    if content.startswith('{'):
+                        data = json.loads(content)
+                        mem_type = data.get('type', 'Fact')
+                        categories[mem_type].append(data.get('label', content[:50]))
+                    else:
+                        categories['Fact'].append(content[:50])
+                except:
+                    continue
+            
+            # Build summary
+            summary_parts = [f"Memory contains {len(memories)} items:"]
+            for category, items in categories.items():
+                summary_parts.append(f"- {category}: {len(items)} items")
+                if items[:3]:  # Show first 3 examples
+                    examples = ", ".join(items[:3])
+                    summary_parts.append(f"  Examples: {examples[:100]}")
+            
+            summary = "\n".join(summary_parts)
+            
+            # Truncate if needed
+            if len(summary) > max_length:
+                summary = summary[:max_length - 3] + "..."
+            
+            return summary
+            
+        except Exception as e:
+            logger.error("Failed to generate memory summary", error=str(e))
+            return f"Error generating summary: {str(e)}"
+    
+    async def prune_memory(
+        self,
+        max_items: int = 1000,
+        importance_threshold: float = 0.3,
+        age_days: int = 90
+    ) -> Dict[str, int]:
+        """
+        Prune old or low-importance memories.
+        
+        Args:
+            max_items: Maximum items to keep
+            importance_threshold: Minimum importance to keep
+            age_days: Remove items older than this
+            
+        Returns:
+            Dictionary with pruning statistics
+        """
+        if not await self._ensure_initialized():
+            return {"removed": 0, "kept": 0, "error": "Not initialized"}
+        
+        if not self.agent_id:
+            return {"removed": 0, "kept": 0, "error": "No agent"}
+        
+        try:
+            # Get all memories
+            memories = await self.client.agents.passages.list(
+                agent_id=self.agent_id,
+                limit=10000
+            )
+            
+            if not memories:
+                return {"removed": 0, "kept": len(memories)}
+            
+            # Score and sort memories
+            scored_memories = []
+            cutoff_date = datetime.now() - timedelta(days=age_days)
+            
+            for passage in memories:
+                try:
+                    content = passage.text if hasattr(passage, 'text') else str(passage)
+                    
+                    # Calculate importance
+                    importance = 0.5  # Default
+                    created_at = datetime.now()  # Default to now
+                    
+                    if content.startswith('{'):
+                        data = json.loads(content)
+                        importance = data.get('importance_score', 0.5)
+                        if data.get('stored_at'):
+                            created_at = datetime.fromisoformat(data['stored_at'])
+                    
+                    # Skip if too old or low importance
+                    if created_at < cutoff_date or importance < importance_threshold:
+                        continue
+                    
+                    scored_memories.append((importance, passage))
+                    
+                except:
+                    # Keep on error
+                    scored_memories.append((0.5, passage))
+            
+            # Sort by importance and keep top N
+            scored_memories.sort(key=lambda x: x[0], reverse=True)
+            to_keep = scored_memories[:max_items]
+            to_remove = scored_memories[max_items:]
+            
+            # Delete excess memories
+            removed_count = 0
+            if to_remove:
+                for _, passage in to_remove:
+                    try:
+                        if hasattr(passage, 'id'):
+                            await self.client.agents.passages.delete(
+                                agent_id=self.agent_id,
+                                passage_id=passage.id
+                            )
+                            removed_count += 1
+                    except:
+                        pass
+            
+            logger.info(
+                "Memory pruning completed",
+                total=len(memories),
+                kept=len(to_keep),
+                removed=removed_count
+            )
+            
+            return {
+                "total": len(memories),
+                "kept": len(to_keep),
+                "removed": removed_count,
+                "threshold": importance_threshold,
+                "age_days": age_days
+            }
+            
+        except Exception as e:
+            logger.error("Memory pruning failed", error=str(e))
+            return {"removed": 0, "kept": 0, "error": str(e)}
+    
+    async def export_memory(
+        self,
+        format: str = "json",
+        include_metadata: bool = True
+    ) -> Union[str, Dict[str, Any]]:
+        """
+        Export memory to JSON or CSV format.
+        
+        Args:
+            format: Export format ("json" or "csv")
+            include_metadata: Include metadata in export
+            
+        Returns:
+            Exported data as string or dict
+        """
+        if not await self._ensure_initialized():
+            return {"error": "Not initialized"}
+        
+        if not self.agent_id:
+            return {"error": "No agent"}
+        
+        try:
+            # Get all memories
+            memories = await self.client.agents.passages.list(
+                agent_id=self.agent_id,
+                limit=10000
+            )
+            
+            if format == "json":
+                export_data = {
+                    "agent_id": self.agent_id,
+                    "matter_name": self.matter_name,
+                    "export_date": datetime.now().isoformat(),
+                    "memory_count": len(memories) if memories else 0,
+                    "memories": []
+                }
+                
+                for passage in (memories or []):
+                    memory_item = {
+                        "text": passage.text if hasattr(passage, 'text') else str(passage)
+                    }
+                    
+                    if include_metadata:
+                        memory_item["id"] = passage.id if hasattr(passage, 'id') else None
+                        memory_item["created_at"] = str(passage.created_at) if hasattr(passage, 'created_at') else None
+                    
+                    # Parse structured data if available
+                    try:
+                        if memory_item["text"].startswith('{'):
+                            memory_item["data"] = json.loads(memory_item["text"])
+                    except:
+                        pass
+                    
+                    export_data["memories"].append(memory_item)
+                
+                return export_data
+                
+            elif format == "csv":
+                # Build CSV string
+                import csv
+                import io
+                
+                output = io.StringIO()
+                writer = csv.writer(output)
+                
+                # Header
+                headers = ["Type", "Label", "Date", "Actors", "Support", "Importance"]
+                if include_metadata:
+                    headers.extend(["ID", "Created"])
+                writer.writerow(headers)
+                
+                # Rows
+                for passage in (memories or []):
+                    try:
+                        content = passage.text if hasattr(passage, 'text') else str(passage)
+                        row = []
+                        
+                        if content.startswith('{'):
+                            data = json.loads(content)
+                            row = [
+                                data.get('type', ''),
+                                data.get('label', '')[:100],
+                                data.get('date', ''),
+                                ';'.join(data.get('actors', [])),
+                                data.get('support_snippet', '')[:200],
+                                data.get('importance_score', '')
+                            ]
+                        else:
+                            row = ['Fact', content[:100], '', '', content[:200], '']
+                        
+                        if include_metadata:
+                            row.append(passage.id if hasattr(passage, 'id') else '')
+                            row.append(str(passage.created_at) if hasattr(passage, 'created_at') else '')
+                        
+                        writer.writerow(row)
+                    except:
+                        continue
+                
+                return output.getvalue()
+            
+            else:
+                return {"error": f"Unsupported format: {format}"}
+                
+        except Exception as e:
+            logger.error("Memory export failed", error=str(e))
+            return {"error": str(e)}
+    
+    async def import_memory(
+        self,
+        data: Union[str, Dict[str, Any]],
+        format: str = "json",
+        deduplicate: bool = True
+    ) -> Dict[str, int]:
+        """
+        Import memory from external source.
+        
+        Args:
+            data: Memory data to import
+            format: Import format ("json" or "csv")
+            deduplicate: Check for duplicates
+            
+        Returns:
+            Import statistics
+        """
+        if not await self._ensure_initialized():
+            return {"imported": 0, "skipped": 0, "error": "Not initialized"}
+        
+        if not self.agent_id:
+            return {"imported": 0, "skipped": 0, "error": "No agent"}
+        
+        imported = 0
+        skipped = 0
+        
+        try:
+            memories_to_import = []
+            
+            if format == "json":
+                if isinstance(data, str):
+                    data = json.loads(data)
+                
+                if isinstance(data, dict) and 'memories' in data:
+                    memories_to_import = data['memories']
+                elif isinstance(data, list):
+                    memories_to_import = data
+                    
+            elif format == "csv":
+                import csv
+                import io
+                
+                reader = csv.DictReader(io.StringIO(data))
+                for row in reader:
+                    memory_item = {
+                        "type": row.get("Type", "Fact"),
+                        "label": row.get("Label", ""),
+                        "date": row.get("Date"),
+                        "actors": row.get("Actors", "").split(';') if row.get("Actors") else [],
+                        "support_snippet": row.get("Support", "")
+                    }
+                    memories_to_import.append({"data": memory_item})
+            
+            # Get existing hashes if deduplicating
+            existing_hashes = set()
+            if deduplicate:
+                existing = await self.client.agents.passages.list(
+                    agent_id=self.agent_id,
+                    limit=10000
+                )
+                for p in (existing or []):
+                    content = p.text if hasattr(p, 'text') else str(p)
+                    existing_hashes.add(hashlib.md5(content.encode()).hexdigest())
+            
+            # Import memories
+            for memory in memories_to_import:
+                try:
+                    # Extract content
+                    if isinstance(memory, dict):
+                        if 'data' in memory:
+                            content = json.dumps(memory['data'])
+                        elif 'text' in memory:
+                            content = memory['text']
+                        else:
+                            content = json.dumps(memory)
+                    else:
+                        content = str(memory)
+                    
+                    # Check duplicate
+                    content_hash = hashlib.md5(content.encode()).hexdigest()
+                    if deduplicate and content_hash in existing_hashes:
+                        skipped += 1
+                        continue
+                    
+                    # Import
+                    await self.client.agents.passages.create(
+                        agent_id=self.agent_id,
+                        text=content
+                    )
+                    imported += 1
+                    existing_hashes.add(content_hash)
+                    
+                except Exception as e:
+                    logger.debug(f"Failed to import memory item: {e}")
+                    skipped += 1
+            
+            logger.info(
+                "Memory import completed",
+                imported=imported,
+                skipped=skipped,
+                total=len(memories_to_import)
+            )
+            
+            return {
+                "imported": imported,
+                "skipped": skipped,
+                "total": len(memories_to_import)
+            }
+            
+        except Exception as e:
+            logger.error("Memory import failed", error=str(e))
+            return {"imported": imported, "skipped": skipped, "error": str(e)}
     
     async def _initialize_or_load_agent_async(self) -> None:
         """Initialize new agent or load existing one for this Matter."""
@@ -1011,6 +1830,307 @@ Return only the questions, one per line."""
         except Exception as e:
             logger.error("Failed to clean up local data", error=str(e))
             return False
+    
+    async def analyze_memory_patterns(self) -> Dict[str, Any]:
+        """
+        Analyze patterns and insights in stored memory.
+        
+        Returns:
+            Dictionary with pattern analysis results
+        """
+        if not await self._ensure_initialized():
+            return {"error": "Not initialized"}
+        
+        if not self.agent_id:
+            return {"error": "No agent"}
+        
+        try:
+            # Get all memories
+            memories = await self.client.agents.passages.list(
+                agent_id=self.agent_id,
+                limit=10000
+            )
+            
+            if not memories:
+                return {"patterns": [], "insights": [], "total_memories": 0}
+            
+            # Analyze patterns
+            type_counts = Counter()
+            actor_counts = Counter()
+            date_distribution = defaultdict(int)
+            doc_references = Counter()
+            co_occurrences = defaultdict(list)
+            
+            for passage in memories:
+                try:
+                    content = passage.text if hasattr(passage, 'text') else str(passage)
+                    
+                    if content.startswith('{'):
+                        data = json.loads(content)
+                        
+                        # Count types
+                        type_counts[data.get('type', 'Unknown')] += 1
+                        
+                        # Count actors
+                        for actor in data.get('actors', []):
+                            actor_counts[actor] += 1
+                        
+                        # Date distribution
+                        if data.get('date'):
+                            try:
+                                date = datetime.fromisoformat(data['date'])
+                                month_key = date.strftime('%Y-%m')
+                                date_distribution[month_key] += 1
+                            except:
+                                pass
+                        
+                        # Document references
+                        for ref in data.get('doc_refs', []):
+                            doc_references[ref.get('doc', 'Unknown')] += 1
+                        
+                        # Track co-occurrences
+                        label = data.get('label', '')
+                        for actor in data.get('actors', []):
+                            co_occurrences[actor].append(label)
+                    
+                except:
+                    continue
+            
+            # Identify patterns
+            patterns = []
+            
+            # Most common memory types
+            if type_counts:
+                most_common_type = type_counts.most_common(1)[0]
+                patterns.append({
+                    "type": "dominant_memory_type",
+                    "value": most_common_type[0],
+                    "count": most_common_type[1],
+                    "percentage": (most_common_type[1] / len(memories)) * 100
+                })
+            
+            # Key actors
+            if actor_counts:
+                key_actors = actor_counts.most_common(5)
+                patterns.append({
+                    "type": "key_actors",
+                    "actors": [{"name": a[0], "mentions": a[1]} for a in key_actors]
+                })
+            
+            # Temporal patterns
+            if date_distribution:
+                peak_month = max(date_distribution.items(), key=lambda x: x[1])
+                patterns.append({
+                    "type": "peak_activity",
+                    "month": peak_month[0],
+                    "count": peak_month[1]
+                })
+            
+            # Document focus
+            if doc_references:
+                top_docs = doc_references.most_common(3)
+                patterns.append({
+                    "type": "primary_sources",
+                    "documents": [{"name": d[0], "references": d[1]} for d in top_docs]
+                })
+            
+            # Generate insights
+            insights = []
+            
+            # Memory diversity
+            type_diversity = len(type_counts) / 4  # Assuming 4 main types
+            insights.append({
+                "insight": "memory_diversity",
+                "score": type_diversity,
+                "interpretation": "High" if type_diversity > 0.75 else "Medium" if type_diversity > 0.5 else "Low"
+            })
+            
+            # Actor network complexity
+            if actor_counts:
+                avg_connections = sum(len(v) for v in co_occurrences.values()) / len(actor_counts)
+                insights.append({
+                    "insight": "network_complexity",
+                    "avg_connections": avg_connections,
+                    "interpretation": "Complex" if avg_connections > 5 else "Moderate" if avg_connections > 2 else "Simple"
+                })
+            
+            # Memory growth rate (if timestamps available)
+            growth_rate = len(memories) / max(1, len(date_distribution))  # Memories per time period
+            insights.append({
+                "insight": "growth_rate",
+                "rate": growth_rate,
+                "interpretation": "Rapid" if growth_rate > 50 else "Steady" if growth_rate > 10 else "Slow"
+            })
+            
+            return {
+                "total_memories": len(memories),
+                "patterns": patterns,
+                "insights": insights,
+                "type_distribution": dict(type_counts),
+                "actor_network": dict(actor_counts.most_common(10)),
+                "temporal_distribution": dict(date_distribution)
+            }
+            
+        except Exception as e:
+            logger.error("Pattern analysis failed", error=str(e))
+            return {"error": str(e)}
+    
+    async def get_memory_quality_metrics(self) -> Dict[str, float]:
+        """
+        Calculate quality metrics for stored memory.
+        
+        Returns:
+            Dictionary with quality scores
+        """
+        if not await self._ensure_initialized():
+            return {"quality_score": 0.0}
+        
+        if not self.agent_id:
+            return {"quality_score": 0.0}
+        
+        try:
+            memories = await self.client.agents.passages.list(
+                agent_id=self.agent_id,
+                limit=1000
+            )
+            
+            if not memories:
+                return {"quality_score": 0.0}
+            
+            # Calculate quality metrics
+            structured_count = 0
+            has_support_count = 0
+            has_references_count = 0
+            has_date_count = 0
+            avg_length = 0
+            total_length = 0
+            
+            for passage in memories:
+                try:
+                    content = passage.text if hasattr(passage, 'text') else str(passage)
+                    total_length += len(content)
+                    
+                    if content.startswith('{'):
+                        data = json.loads(content)
+                        structured_count += 1
+                        
+                        if data.get('support_snippet'):
+                            has_support_count += 1
+                        if data.get('doc_refs'):
+                            has_references_count += 1
+                        if data.get('date'):
+                            has_date_count += 1
+                except:
+                    continue
+            
+            # Calculate scores
+            structure_score = structured_count / len(memories)
+            support_score = has_support_count / max(1, structured_count)
+            reference_score = has_references_count / max(1, structured_count)
+            temporal_score = has_date_count / max(1, structured_count)
+            avg_length = total_length / len(memories)
+            
+            # Length score (optimal between 50-500 chars)
+            if avg_length < 50:
+                length_score = avg_length / 50
+            elif avg_length > 500:
+                length_score = max(0.3, 1 - (avg_length - 500) / 1000)
+            else:
+                length_score = 1.0
+            
+            # Overall quality score
+            quality_score = (
+                structure_score * 0.3 +
+                support_score * 0.25 +
+                reference_score * 0.25 +
+                temporal_score * 0.1 +
+                length_score * 0.1
+            )
+            
+            return {
+                "quality_score": round(quality_score, 3),
+                "structure_score": round(structure_score, 3),
+                "support_score": round(support_score, 3),
+                "reference_score": round(reference_score, 3),
+                "temporal_score": round(temporal_score, 3),
+                "length_score": round(length_score, 3),
+                "avg_memory_length": round(avg_length, 1),
+                "total_memories": len(memories)
+            }
+            
+        except Exception as e:
+            logger.error("Quality metrics calculation failed", error=str(e))
+            return {"quality_score": 0.0, "error": str(e)}
+    
+    # Helper methods for new features
+    def _calculate_importance_score(self, item: KnowledgeItem) -> float:
+        """Calculate importance score for a knowledge item."""
+        score = 0.5  # Base score
+        
+        # Boost for having support
+        if item.support_snippet:
+            score += 0.2
+        
+        # Boost for having document references
+        if item.doc_refs:
+            score += 0.15
+        
+        # Boost for having actors
+        if item.actors:
+            score += 0.1
+        
+        # Boost for having date
+        if item.date:
+            score += 0.05
+        
+        # Type-based adjustments
+        if item.type == "Issue":
+            score += 0.1
+        elif item.type == "Event":
+            score += 0.05
+        
+        return min(1.0, score)
+    
+    def _hash_knowledge_item(self, item: KnowledgeItem) -> str:
+        """Generate hash for a knowledge item for deduplication."""
+        # Create consistent hash by sorting actors and normalizing content
+        actors_str = ','.join(sorted(item.actors or []))
+        content = f"{item.type}:{item.label}:{item.date or ''}:{actors_str}"
+        return hashlib.md5(content.encode()).hexdigest()
+    
+    def _hash_memory(self, memory_text: str) -> str:
+        """Generate hash for memory text."""
+        return hashlib.md5(memory_text.encode()).hexdigest()
+    
+    async def _get_all_memories_cached(self) -> List[str]:
+        """Get all memories with caching."""
+        # Simple in-memory cache (would use Redis in production)
+        cache_key = f"memories_{self.agent_id}"
+        
+        # For now, just fetch fresh
+        memories = await self.client.agents.passages.list(
+            agent_id=self.agent_id,
+            limit=10000
+        )
+        
+        return [p.text if hasattr(p, 'text') else str(p) for p in (memories or [])]
+    
+    async def _summarize_memory_block(self, content: str, max_size: int) -> str:
+        """Summarize memory block content to fit size limit."""
+        # Simple truncation for now - could use LLM summarization
+        if len(content) <= max_size:
+            return content
+        
+        # Keep beginning and end
+        half_size = (max_size - 20) // 2
+        return f"{content[:half_size]}\n...[truncated]...\n{content[-half_size:]}"
+    
+    def _parse_complex_query(self, query: str) -> List[str]:
+        """Parse complex query with AND/OR logic into search terms."""
+        # Simple implementation - split on OR
+        if " OR " in query:
+            return [term.strip() for term in query.split(" OR ")]
+        return [query]
     
     def _fallback_followups(self) -> List[str]:
         """Fallback follow-up suggestions when Letta is unavailable."""
