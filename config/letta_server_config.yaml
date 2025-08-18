@@ -1,0 +1,224 @@
+# Letta Server Configuration
+# This file configures the local Letta server for the construction claims assistant
+
+server:
+  # Server mode: rest or websocket
+  type: rest
+  
+  # Network configuration
+  host: localhost
+  port: 8283
+  
+  # CORS settings for web UI access
+  cors_origins:
+    - "http://localhost:*"
+    - "http://127.0.0.1:*"
+  
+  # Performance settings
+  workers: 4
+  timeout: 120  # Request timeout in seconds
+  
+  # Development options
+  debug: false
+  reload: false  # Auto-reload on code changes
+  
+  # Security
+  secure: false  # Enable authentication
+  api_key: ""    # Leave empty for local use
+
+storage:
+  # Database backend
+  type: sqlite  # Options: sqlite, postgres
+  
+  # SQLite configuration
+  sqlite:
+    path: ~/.letta-claim/letta.db
+    # Connection pool settings
+    pool_size: 5
+    max_overflow: 10
+    pool_timeout: 30
+  
+  # PostgreSQL configuration (alternative)
+  postgres:
+    host: localhost
+    port: 5432
+    database: letta_claims
+    user: letta_user
+    password: ""  # Set via environment variable
+    pool_size: 20
+    max_overflow: 40
+
+memory:
+  # Memory storage settings
+  archival:
+    max_size_mb: 1000  # Max archival memory per agent
+    compression: true  # Compress old memories
+    ttl_days: 0       # 0 = no expiration
+  
+  recall:
+    max_size_mb: 100   # Max recall memory per agent
+    ttl_days: 30       # Auto-expire after 30 days
+  
+  core:
+    max_blocks: 10     # Max core memory blocks
+    max_block_size: 5000  # Characters per block
+
+embeddings:
+  # Default embedding configuration
+  provider: ollama
+  model: nomic-embed-text
+  dimension: 768
+  batch_size: 100
+  
+  # Caching
+  cache:
+    enabled: true
+    ttl_hours: 168  # Cache for 1 week
+    max_size_mb: 500
+
+models:
+  # Default LLM configuration
+  default_provider: ollama
+  
+  # Ollama settings
+  ollama:
+    endpoint: http://localhost:11434
+    default_model: gpt-oss:20b
+    timeout: 60
+    
+    # Available models (for validation)
+    available_models:
+      - gpt-oss:20b
+      - gemma2:2b
+      - phi4-mini:3.8b
+      - qwen3:8b
+      - granite3.3:8b
+      - deepseek-r1:8b
+      - llama3:8b-instruct-q5_K_M
+  
+  # External API settings (require user consent)
+  external:
+    # Gemini
+    gemini:
+      endpoint: https://generativelanguage.googleapis.com
+      default_model: gemini-1.5-flash
+      require_consent: true
+      
+    # OpenAI
+    openai:
+      endpoint: https://api.openai.com/v1
+      default_model: gpt-4o-mini
+      require_consent: true
+      
+    # Anthropic
+    anthropic:
+      endpoint: https://api.anthropic.com
+      default_model: claude-3-haiku
+      require_consent: true
+
+logging:
+  # Logging configuration
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  
+  # File logging
+  file:
+    enabled: true
+    path: ~/.letta-claim/logs/letta-server.log
+    max_size_mb: 100
+    backup_count: 5
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # Console logging
+  console:
+    enabled: true
+    format: "%(levelname)s - %(message)s"
+  
+  # Structured logging
+  structured:
+    enabled: false
+    format: json
+
+monitoring:
+  # Performance monitoring
+  metrics:
+    enabled: true
+    export_interval: 60  # seconds
+    
+  # Health checks
+  health:
+    enabled: true
+    endpoint: /health
+    include_storage: true
+    include_models: true
+    
+  # Telemetry (opt-in)
+  telemetry:
+    enabled: false
+    anonymous: true
+
+limits:
+  # Rate limiting
+  requests:
+    per_minute: 60
+    per_hour: 1000
+    per_day: 10000
+  
+  # Resource limits
+  max_agents: 100
+  max_memories_per_agent: 10000
+  max_message_length: 50000
+  max_response_length: 10000
+  
+  # Timeout settings
+  agent_creation_timeout: 30
+  message_timeout: 120
+  memory_search_timeout: 10
+
+security:
+  # Security settings
+  api_keys:
+    enabled: false  # Enable for production
+    header_name: X-API-Key
+    
+  # IP allowlist (empty = allow all)
+  ip_allowlist: []
+  
+  # Request validation
+  validate_json: true
+  max_request_size_mb: 10
+  
+  # Audit logging
+  audit:
+    enabled: false
+    log_requests: false
+    log_responses: false
+    exclude_paths:
+      - /health
+      - /metrics
+
+# Environment-specific overrides
+environments:
+  development:
+    server:
+      debug: true
+      reload: true
+    logging:
+      level: DEBUG
+      
+  production:
+    server:
+      debug: false
+      workers: 8
+    security:
+      api_keys:
+        enabled: true
+    logging:
+      level: WARNING
+      
+  testing:
+    storage:
+      type: sqlite
+      sqlite:
+        path: ":memory:"  # In-memory DB for tests
+    logging:
+      level: DEBUG

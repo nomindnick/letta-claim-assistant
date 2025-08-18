@@ -1,0 +1,257 @@
+version: '3.8'
+
+# Docker Compose configuration for Letta Claims Assistant
+# Provides containerized deployment of Letta server and dependencies
+
+services:
+  # Letta Server
+  letta-server:
+    image: letta/letta:latest
+    container_name: letta-claims-server
+    restart: unless-stopped
+    
+    ports:
+      - "8283:8283"  # REST API
+      - "8284:8284"  # WebSocket (if enabled)
+    
+    environment:
+      # Server configuration
+      - LETTA_SERVER_TYPE=rest
+      - LETTA_SERVER_HOST=0.0.0.0
+      - LETTA_SERVER_PORT=8283
+      - LETTA_SERVER_WORKERS=4
+      
+      # Database configuration
+      - LETTA_STORAGE_TYPE=sqlite
+      - LETTA_STORAGE_PATH=/data/letta.db
+      
+      # Model configuration
+      - LETTA_DEFAULT_LLM_PROVIDER=ollama
+      - LETTA_OLLAMA_ENDPOINT=http://ollama:11434
+      
+      # Logging
+      - LETTA_LOG_LEVEL=INFO
+      - LETTA_LOG_FILE=/logs/letta-server.log
+      
+      # Security (for production)
+      # - LETTA_API_KEY=${LETTA_API_KEY}
+      # - LETTA_SECURE_MODE=true
+    
+    volumes:
+      # Persistent data storage
+      - letta-data:/data
+      - letta-logs:/logs
+      - ./config/letta_server_config.yaml:/config/server.yaml:ro
+      
+      # For local development - mount source code
+      # - ../app:/app
+    
+    networks:
+      - letta-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8283/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    depends_on:
+      ollama:
+        condition: service_healthy
+    
+    command: >
+      sh -c "
+        echo 'Starting Letta server...' &&
+        letta server \
+          --port 8283 \
+          --host 0.0.0.0 \
+          --config /config/server.yaml
+      "
+
+  # Ollama for local LLM
+  ollama:
+    image: ollama/ollama:latest
+    container_name: letta-claims-ollama
+    restart: unless-stopped
+    
+    ports:
+      - "11434:11434"
+    
+    volumes:
+      # Model storage
+      - ollama-models:/root/.ollama
+      
+      # GPU support (uncomment if NVIDIA GPU available)
+      # - /dev/nvidia0:/dev/nvidia0
+      # - /dev/nvidiactl:/dev/nvidiactl
+      # - /dev/nvidia-uvm:/dev/nvidia-uvm
+    
+    networks:
+      - letta-network
+    
+    # GPU runtime (uncomment if NVIDIA GPU available)
+    # runtime: nvidia
+    # environment:
+    #   - NVIDIA_VISIBLE_DEVICES=all
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Pre-load models on startup
+    command: >
+      sh -c "
+        ollama serve &
+        sleep 5 &&
+        echo 'Pulling required models...' &&
+        ollama pull gpt-oss:20b &&
+        ollama pull nomic-embed-text &&
+        echo 'Models ready' &&
+        wait
+      "
+
+  # PostgreSQL (alternative to SQLite for production)
+  postgres:
+    image: postgres:15-alpine
+    container_name: letta-claims-postgres
+    restart: unless-stopped
+    
+    profiles:
+      - production  # Only start in production profile
+    
+    environment:
+      - POSTGRES_DB=letta_claims
+      - POSTGRES_USER=letta_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_MAX_CONNECTIONS=100
+    
+    ports:
+      - "5432:5432"
+    
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    
+    networks:
+      - letta-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U letta_user -d letta_claims"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: letta-claims-redis
+    restart: unless-stopped
+    
+    profiles:
+      - caching  # Only start if caching profile enabled
+    
+    ports:
+      - "6379:6379"
+    
+    volumes:
+      - redis-data:/data
+    
+    networks:
+      - letta-network
+    
+    command: redis-server --appendonly yes
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Nginx reverse proxy (optional, for production)
+  nginx:
+    image: nginx:alpine
+    container_name: letta-claims-nginx
+    restart: unless-stopped
+    
+    profiles:
+      - production
+    
+    ports:
+      - "80:80"
+      - "443:443"
+    
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/ssl:/etc/nginx/ssl:ro
+      - nginx-logs:/var/log/nginx
+    
+    networks:
+      - letta-network
+    
+    depends_on:
+      - letta-server
+
+# Networks
+networks:
+  letta-network:
+    driver: bridge
+    name: letta-claims-network
+
+# Volumes for persistent data
+volumes:
+  letta-data:
+    name: letta-claims-data
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LETTA_DATA_PATH:-./data/letta}
+  
+  letta-logs:
+    name: letta-claims-logs
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LETTA_LOGS_PATH:-./logs}
+  
+  ollama-models:
+    name: letta-claims-ollama-models
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${OLLAMA_MODELS_PATH:-./data/ollama}
+  
+  postgres-data:
+    name: letta-claims-postgres
+    driver: local
+  
+  redis-data:
+    name: letta-claims-redis
+    driver: local
+  
+  nginx-logs:
+    name: letta-claims-nginx-logs
+    driver: local
+
+# Usage:
+# 
+# Development:
+#   docker-compose up
+#
+# Production with PostgreSQL:
+#   docker-compose --profile production up
+#
+# With caching:
+#   docker-compose --profile caching up
+#
+# Stop all services:
+#   docker-compose down
+#
+# Remove all data:
+#   docker-compose down -v

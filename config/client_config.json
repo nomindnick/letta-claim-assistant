@@ -1,0 +1,246 @@
+{
+  "// Description": "Client configuration template for Letta Claims Assistant",
+  "// Instructions": "Copy this file to ~/.letta-claim/client_config.json and customize",
+  
+  "client": {
+    "// Server connection": "Configuration for connecting to Letta server",
+    "server": {
+      "base_url": "http://localhost:8283",
+      "timeout": 30,
+      "max_retries": 3,
+      "retry_delay": 1.0,
+      "health_check_interval": 60
+    },
+    
+    "// Connection pool": "Client connection pooling settings",
+    "pool": {
+      "enabled": true,
+      "max_connections": 10,
+      "connection_timeout": 10,
+      "idle_timeout": 300
+    },
+    
+    "// Authentication": "API key authentication (if enabled on server)",
+    "auth": {
+      "enabled": false,
+      "api_key": "",
+      "api_key_header": "X-API-Key"
+    }
+  },
+  
+  "agents": {
+    "// Default agent settings": "Applied to all new agents unless overridden",
+    "defaults": {
+      "system_prompt": "You are a construction claims analyst assistant with expertise in construction law, contracts, and damage assessment.",
+      "temperature": 0.7,
+      "max_tokens": 2000,
+      "context_window": 8192
+    },
+    
+    "// Memory configuration": "Agent memory settings",
+    "memory": {
+      "archival": {
+        "enabled": true,
+        "max_items": 10000,
+        "search_limit": 20
+      },
+      "core": {
+        "human_block": "Construction attorney working on claim analysis",
+        "persona_block": "Expert construction claims analyst with detailed knowledge of construction law and practices"
+      },
+      "recall": {
+        "enabled": true,
+        "max_items": 100
+      }
+    }
+  },
+  
+  "models": {
+    "// Primary LLM provider": "Default language model configuration",
+    "primary": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "endpoint": "http://localhost:11434",
+      "context_window": 8192,
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "max_tokens": 2000
+    },
+    
+    "// Embedding model": "Configuration for text embeddings",
+    "embedding": {
+      "provider": "ollama",
+      "model": "nomic-embed-text",
+      "endpoint": "http://localhost:11434",
+      "dimension": 768,
+      "batch_size": 100
+    },
+    
+    "// Fallback models": "Alternative models if primary fails",
+    "fallback": [
+      {
+        "provider": "ollama",
+        "model": "gemma2:2b",
+        "endpoint": "http://localhost:11434",
+        "context_window": 4096
+      },
+      {
+        "provider": "ollama",
+        "model": "phi4-mini:3.8b",
+        "endpoint": "http://localhost:11434",
+        "context_window": 4096
+      }
+    ],
+    
+    "// External APIs": "Configuration for external LLM providers (requires consent)",
+    "external": {
+      "gemini": {
+        "enabled": false,
+        "model": "gemini-1.5-flash",
+        "endpoint": "https://generativelanguage.googleapis.com",
+        "api_key": "${GEMINI_API_KEY}",
+        "context_window": 32768,
+        "require_consent": true,
+        "consent_message": "This will send data to Google's Gemini API. Do you consent?",
+        "rate_limit": {
+          "requests_per_minute": 60,
+          "tokens_per_minute": 40000
+        }
+      },
+      "openai": {
+        "enabled": false,
+        "model": "gpt-4o-mini",
+        "endpoint": "https://api.openai.com/v1",
+        "api_key": "${OPENAI_API_KEY}",
+        "context_window": 16384,
+        "require_consent": true,
+        "consent_message": "This will send data to OpenAI's API. Do you consent?",
+        "rate_limit": {
+          "requests_per_minute": 60,
+          "tokens_per_minute": 60000
+        }
+      },
+      "anthropic": {
+        "enabled": false,
+        "model": "claude-3-haiku",
+        "endpoint": "https://api.anthropic.com",
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "context_window": 200000,
+        "require_consent": true,
+        "consent_message": "This will send data to Anthropic's Claude API. Do you consent?",
+        "rate_limit": {
+          "requests_per_minute": 60,
+          "tokens_per_minute": 100000
+        }
+      }
+    }
+  },
+  
+  "performance": {
+    "// Caching": "Response and embedding caching",
+    "cache": {
+      "enabled": true,
+      "type": "memory",
+      "ttl_seconds": 3600,
+      "max_size_mb": 100,
+      "compression": true
+    },
+    
+    "// Batching": "Batch processing settings",
+    "batch": {
+      "enabled": true,
+      "max_batch_size": 10,
+      "batch_timeout_ms": 100
+    },
+    
+    "// Concurrency": "Parallel processing limits",
+    "concurrency": {
+      "max_concurrent_requests": 5,
+      "max_concurrent_agents": 10,
+      "queue_size": 100
+    }
+  },
+  
+  "logging": {
+    "// Client-side logging": "Local logging configuration",
+    "level": "INFO",
+    "file": {
+      "enabled": true,
+      "path": "~/.letta-claim/logs/client.log",
+      "max_size_mb": 50,
+      "backup_count": 3
+    },
+    "console": {
+      "enabled": true,
+      "format": "simple"
+    },
+    "// Sensitive data": "Control logging of sensitive information",
+    "redact": {
+      "api_keys": true,
+      "personal_data": true,
+      "document_content": false
+    }
+  },
+  
+  "ui": {
+    "// UI integration settings": "Configuration for UI components",
+    "indicators": {
+      "show_memory_operations": true,
+      "show_llm_provider": true,
+      "show_token_usage": false,
+      "show_cost_estimate": false
+    },
+    
+    "// Progress tracking": "Background operation feedback",
+    "progress": {
+      "show_progress_bar": true,
+      "update_interval_ms": 500,
+      "show_eta": true
+    },
+    
+    "// Error handling": "UI error display settings",
+    "errors": {
+      "show_technical_details": false,
+      "suggest_actions": true,
+      "auto_retry": true,
+      "max_auto_retries": 2
+    }
+  },
+  
+  "matters": {
+    "// Matter-specific settings": "Per-matter configuration",
+    "defaults": {
+      "auto_create_agent": true,
+      "preserve_memory_on_delete": false,
+      "export_format": "json"
+    },
+    
+    "// Storage paths": "Where matter data is stored",
+    "paths": {
+      "root": "~/LettaClaims",
+      "agent_data": "knowledge/letta_state",
+      "exports": "exports",
+      "backups": "backups"
+    }
+  },
+  
+  "development": {
+    "// Development mode settings": "Settings for development/testing",
+    "enabled": false,
+    "mock_external_apis": true,
+    "verbose_logging": true,
+    "skip_consent_checks": false,
+    "test_data_path": "./test_data"
+  },
+  
+  "// Environment variables": "List of environment variables that can override settings",
+  "env_overrides": [
+    "LETTA_SERVER_URL",
+    "LETTA_API_KEY",
+    "OLLAMA_ENDPOINT",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "LOG_LEVEL"
+  ]
+}
