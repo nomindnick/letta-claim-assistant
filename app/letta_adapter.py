@@ -140,14 +140,13 @@ class LettaAdapter:
         
         # Use connection manager to execute with retry and metrics
         async def _recall_operation():
-            # TODO: Fix archival memory API - method name changed in new version
-            # return await self.client.agents.search_archival_memory(
-            #     agent_id=self.agent_id,
-            #     query=query,
-            #     limit=top_k * 2  # Get more than needed for filtering
-            # )
-            logger.warning("Archival memory search not yet implemented with new API")
-            return []
+            # Use new passages API for searching archival memory
+            passages = await self.client.agents.passages.list(
+                agent_id=self.agent_id,
+                search=query,
+                limit=top_k * 2  # Get more than needed for filtering
+            )
+            return passages
         
         try:
             # Execute with retry and metrics tracking
@@ -160,10 +159,10 @@ class LettaAdapter:
                 return []
             
             knowledge_items = []
-            for memory_obj in memory_results[:top_k]:
-                # Parse memory content as JSON knowledge item
+            for passage in memory_results[:top_k]:
+                # Parse passage text as JSON knowledge item
                 try:
-                    content = memory_obj.memory if hasattr(memory_obj, 'memory') else str(memory_obj)
+                    content = passage.text if hasattr(passage, 'text') else str(passage)
                     if content.startswith('{') and content.endswith('}'):
                         # Parse JSON knowledge item
                         item_data = json.loads(content)
@@ -241,13 +240,12 @@ class LettaAdapter:
             
             # Store interaction summary with retry
             async def _insert_summary():
-                # TODO: Fix archival memory API - method name changed in new version
-                # return await self.client.agents.insert_archival_memory(
-                #     agent_id=self.agent_id,
-                #     memory=json.dumps(interaction_summary)
-                # )
-                logger.debug("Archival memory insert skipped - API needs update")
-                return None
+                # Use new passages API to insert memory
+                passages = await self.client.agents.passages.create(
+                    agent_id=self.agent_id,
+                    text=json.dumps(interaction_summary)
+                )
+                return passages
             
             await connection_manager.execute_with_retry(
                 "upsert",
@@ -267,12 +265,12 @@ class LettaAdapter:
                 }
                 
                 async def _insert_fact():
-                    # TODO: Fix archival memory API - method name changed in new version
-                    # return await self.client.agents.insert_archival_memory(
-                    #     agent_id=self.agent_id,
-                    #     memory=json.dumps(fact_data)
-                    # )
-                    return None
+                    # Use new passages API to insert fact
+                    passages = await self.client.agents.passages.create(
+                        agent_id=self.agent_id,
+                        text=json.dumps(fact_data)
+                    )
+                    return passages
                 
                 await connection_manager.execute_with_retry(
                     "upsert",
@@ -412,13 +410,12 @@ Return only the questions, one per line."""
         try:
             # Get archival memory count with retry
             async def _get_memory_operation():
-                # TODO: Fix archival memory API - method name changed in new version
-                # return await self.client.agents.get_archival_memory(
-                #     agent_id=self.agent_id,
-                #     limit=1000  # Get count estimate
-                # )
-                logger.debug("Archival memory get skipped - API needs update")
-                return []
+                # Use new passages API to get all memories
+                passages = await self.client.agents.passages.list(
+                    agent_id=self.agent_id,
+                    limit=1000  # Get count estimate
+                )
+                return passages
             
             memory_results = await connection_manager.execute_with_retry(
                 "get_memory_stats",
@@ -834,12 +831,11 @@ Return only the questions, one per line."""
                 
                 for memory in memories:
                     try:
-                        # TODO: Fix archival memory API
-                        # await self.client.agents.insert_archival_memory(
-                        #     agent_id=self.agent_id,
-                        #     memory=memory
-                        # )
-                        pass
+                        # Use new passages API to insert migrated memory
+                        await self.client.agents.passages.create(
+                            agent_id=self.agent_id,
+                            text=memory
+                        )
                     except Exception as mem_error:
                         logger.warning("Failed to migrate memory item", error=str(mem_error))
             
@@ -886,12 +882,11 @@ Return only the questions, one per line."""
             # Export current agent memory if available
             if self.agent_id and await self._ensure_initialized():
                 try:
-                    # TODO: Fix archival memory API
-                    # memories = await self.client.agents.get_archival_memory(
-                    #     agent_id=self.agent_id,
-                    #     limit=10000
-                    # )
-                    memories = []
+                    # Use new passages API to get all memories for backup
+                    memories = await self.client.agents.passages.list(
+                        agent_id=self.agent_id,
+                        limit=10000
+                    )
                     
                     # Save memories to JSON
                     memory_export = {
@@ -899,7 +894,14 @@ Return only the questions, one per line."""
                         "matter_name": self.matter_name,
                         "export_date": datetime.now().isoformat(),
                         "memory_count": len(memories) if memories else 0,
-                        "memories": [m.dict() if hasattr(m, 'dict') else str(m) for m in (memories or [])]
+                        "memories": [
+                            {
+                                "text": p.text,
+                                "id": p.id if hasattr(p, 'id') else None,
+                                "created_at": str(p.created_at) if hasattr(p, 'created_at') else None
+                            } 
+                            for p in (memories or [])
+                        ]
                     }
                     
                     with open(backup_path / "memory_export.json", 'w') as f:
@@ -947,13 +949,17 @@ Return only the questions, one per line."""
                     
                     for memory in memory_export['memories']:
                         try:
-                            memory_content = memory.get('memory') if isinstance(memory, dict) else str(memory)
-                            # TODO: Fix archival memory API
-                            # await self.client.agents.insert_archival_memory(
-                            #     agent_id=self.agent_id,
-                            #     memory=memory_content
-                            # )
-                            pass
+                            # Extract text from the memory structure
+                            if isinstance(memory, dict):
+                                memory_text = memory.get('text') or memory.get('memory') or str(memory)
+                            else:
+                                memory_text = str(memory)
+                            
+                            # Use new passages API to restore memory
+                            await self.client.agents.passages.create(
+                                agent_id=self.agent_id,
+                                text=memory_text
+                            )
                         except Exception as mem_error:
                             logger.warning("Failed to restore memory item", error=str(mem_error))
             

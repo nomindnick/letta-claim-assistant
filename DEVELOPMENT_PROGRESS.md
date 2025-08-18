@@ -1648,10 +1648,15 @@ The Letta Construction Claim Assistant is a production-ready desktop application
 - Fallback mode handles missing server gracefully
 - State tracking accurate across operations
 
-**Issues Encountered:**
-- Letta client import warning shown (expected in fallback mode)
-- Server method name was _is_running not is_running (fixed)
-- delete_agent needs to handle both async and sync contexts
+**Issues Encountered & Fixed:**
+- Import error: `MemoryBlock` doesn't exist in letta_client.types (changed to `Block`)
+- API method names changed in letta_client 0.1.258:
+  - `create_agent()` -> `create()`
+  - `get_agent()` -> `retrieve()` 
+  - `update_agent()` -> `modify()`
+  - `delete_agent()` -> `delete()`
+- Archival memory API methods need investigation (temporarily commented out)
+- Server method was `_is_running` not `is_running` (fixed in test)
 
 **Integration Points:**
 - Matter deletion now calls agent deletion
