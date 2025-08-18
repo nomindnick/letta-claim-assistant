@@ -13,6 +13,7 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime
+import pkg_resources
 
 try:
     from letta import LocalClient, create_client
@@ -20,10 +21,16 @@ try:
     from letta.schemas.memory import ChatMemory
     from letta.schemas.message import Message
     from letta.constants import DEFAULT_PRESET
+    # Get Letta version for compatibility checking
+    try:
+        LETTA_VERSION = pkg_resources.get_distribution("letta").version
+    except:
+        LETTA_VERSION = "unknown"
 except ImportError:
     # Fallback for older versions or installation issues
     LocalClient = None
     create_client = None
+    LETTA_VERSION = None
     print("Warning: Letta import failed, using fallback implementation")
 
 from .logging_conf import get_logger
@@ -46,6 +53,9 @@ class LettaAdapter:
         self.client = None
         self.agent_id = None
         self.agent_state = None
+        
+        # Check for existing data before initialization
+        self._check_existing_data()
         
         # Initialize agent on startup
         self._initialize_client()
@@ -348,13 +358,14 @@ Return only the questions, one per line."""
             # Create new agent
             self._create_new_agent()
             
-            # Save agent configuration
+            # Save agent configuration with version info
             with open(agent_config_path, 'w') as f:
                 json.dump({
                     'agent_id': self.agent_id,
                     'matter_id': self.matter_id,
                     'matter_name': self.matter_name,
-                    'created_at': datetime.now().isoformat()
+                    'created_at': datetime.now().isoformat(),
+                    'letta_version': LETTA_VERSION or 'unknown'
                 }, f, indent=2)
             
         except Exception as e:
@@ -420,3 +431,92 @@ Help them by remembering important facts and providing contextual analysis."""
             "What are the potential damages or cost implications?",
             "Should we engage technical experts for further analysis?"
         ]
+    
+    def _check_existing_data(self) -> None:
+        """
+        Check for existing Letta data from previous versions.
+        Logs warnings and provides guidance for data backup if needed.
+        """
+        try:
+            # Check for existing agent config
+            agent_config_path = self.letta_path / "agent_config.json"
+            
+            if agent_config_path.exists():
+                with open(agent_config_path, 'r') as f:
+                    config = json.load(f)
+                    
+                stored_version = config.get('letta_version', 'unknown')
+                agent_id = config.get('agent_id')
+                created_at = config.get('created_at', 'unknown')
+                
+                # Log existing data information
+                logger.info(
+                    "Found existing Letta agent data",
+                    agent_id=agent_id,
+                    stored_version=stored_version,
+                    created_at=created_at,
+                    current_version=LETTA_VERSION
+                )
+                
+                # Check for version compatibility
+                if LETTA_VERSION and stored_version != 'unknown':
+                    if stored_version != LETTA_VERSION:
+                        logger.warning(
+                            "Letta version mismatch detected",
+                            stored_version=stored_version,
+                            current_version=LETTA_VERSION,
+                            recommendation="Consider backing up agent data before proceeding"
+                        )
+                        
+                        # Provide user guidance
+                        backup_path = self.letta_path.parent / f"letta_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                        logger.warning(
+                            f"BACKUP RECOMMENDED: To preserve existing data, copy {self.letta_path} to {backup_path}"
+                        )
+            
+            # Check for SQLite databases (common in Letta LocalClient)
+            sqlite_files = list(self.letta_path.glob("*.db")) + list(self.letta_path.glob("*.sqlite"))
+            if sqlite_files:
+                logger.info(
+                    "Found existing Letta database files",
+                    database_count=len(sqlite_files),
+                    databases=[str(f.name) for f in sqlite_files]
+                )
+                
+                # Check if databases are accessible
+                for db_file in sqlite_files:
+                    try:
+                        conn = sqlite3.connect(str(db_file))
+                        cursor = conn.cursor()
+                        # Try to get table list (non-destructive read)
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                        tables = cursor.fetchall()
+                        conn.close()
+                        
+                        logger.debug(
+                            f"Database {db_file.name} is accessible",
+                            table_count=len(tables)
+                        )
+                    except Exception as db_error:
+                        logger.warning(
+                            f"Cannot access database {db_file.name}",
+                            error=str(db_error),
+                            recommendation="Database may be from incompatible version"
+                        )
+            
+            # Check for config directory (Letta LocalClient uses this)
+            config_dir = self.letta_path / "config"
+            if config_dir.exists() and config_dir.is_dir():
+                config_files = list(config_dir.glob("*"))
+                if config_files:
+                    logger.info(
+                        "Found existing Letta config directory",
+                        file_count=len(config_files)
+                    )
+                    
+        except Exception as e:
+            # Non-critical error - log but continue
+            logger.debug(
+                "Error checking existing data (non-critical)",
+                error=str(e)
+            )
