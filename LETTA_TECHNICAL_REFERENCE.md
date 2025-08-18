@@ -1,8 +1,10 @@
 # Letta Technical Reference
 
-**Version:** Letta 0.11.3 with letta-client 0.1.258  
+**Version:** Letta 0.10.0 with letta-client 0.1.257 (Stable)  
 **Last Updated:** 2025-08-18  
 **Purpose:** Comprehensive technical guide for integrating Letta's persistent agent memory system
+
+> **Important:** This project uses Letta v0.10.0, which is the latest stable version with a working passages API. Version 0.11.x contains a critical bug that breaks memory storage operations.
 
 ---
 

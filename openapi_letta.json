@@ -3,7 +3,7 @@
   "info": {
     "title": "Letta API",
     "summary": "Create LLM agents with long-term memory and custom tools \ud83d\udcda\ud83e\udd99",
-    "version": "0.11.3"
+    "version": "0.10.0"
   },
   "paths": {
     "/v1/tools/{tool_id}": {
@@ -3899,16 +3899,6 @@
             }
           },
           {
-            "name": "max_steps",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 100,
-              "title": "Max Steps"
-            }
-          },
-          {
             "name": "user_id",
             "in": "header",
             "required": false,
@@ -3975,6 +3965,60 @@
         "description": "Import a serialized agent file and recreate the agent in the system.",
         "operationId": "import_agent_serialized",
         "parameters": [
+          {
+            "name": "append_copy_suffix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "If set to True, appends \"_copy\" to the end of the agent name.",
+              "default": true,
+              "title": "Append Copy Suffix"
+            },
+            "description": "If set to True, appends \"_copy\" to the end of the agent name."
+          },
+          {
+            "name": "override_existing_tools",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "If set to True, existing tools can get their source code overwritten by the uploaded tool definitions. Note that Letta core tools can never be updated externally.",
+              "default": true,
+              "title": "Override Existing Tools"
+            },
+            "description": "If set to True, existing tools can get their source code overwritten by the uploaded tool definitions. Note that Letta core tools can never be updated externally."
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The project ID to associate the uploaded agent with.",
+              "title": "Project Id"
+            },
+            "description": "The project ID to associate the uploaded agent with."
+          },
+          {
+            "name": "strip_messages",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "If set to True, strips all messages from the agent before importing.",
+              "default": false,
+              "title": "Strip Messages"
+            },
+            "description": "If set to True, strips all messages from the agent before importing."
+          },
           {
             "name": "user_id",
             "in": "header",
@@ -14514,30 +14558,6 @@
             "title": "Callback Error",
             "description": "Optional error message from attempting to POST the callback endpoint."
           },
-          "ttft_ns": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ttft Ns",
-            "description": "Time to first token for a run in nanoseconds"
-          },
-          "total_duration_ns": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total Duration Ns",
-            "description": "Total run duration in nanoseconds"
-          },
           "id": {
             "type": "string",
             "pattern": "^(job|run)-[a-fA-F0-9]{8}",
@@ -14829,49 +14849,6 @@
             "type": "string",
             "format": "binary",
             "title": "File"
-          },
-          "append_copy_suffix": {
-            "type": "boolean",
-            "title": "Append Copy Suffix",
-            "description": "If set to True, appends \"_copy\" to the end of the agent name.",
-            "default": true
-          },
-          "override_existing_tools": {
-            "type": "boolean",
-            "title": "Override Existing Tools",
-            "description": "If set to True, existing tools can get their source code overwritten by the uploaded tool definitions. Note that Letta core tools can never be updated externally.",
-            "default": true
-          },
-          "project_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Project Id",
-            "description": "The project ID to associate the uploaded agent with."
-          },
-          "strip_messages": {
-            "type": "boolean",
-            "title": "Strip Messages",
-            "description": "If set to True, strips all messages from the agent before importing.",
-            "default": false
-          },
-          "env_vars": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Env Vars",
-            "description": "Environment variables to pass to the agent for tool execution."
           }
         },
         "type": "object",
@@ -17127,16 +17104,10 @@
             "default": false
           },
           "include_base_tool_rules": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "boolean",
             "title": "Include Base Tool Rules",
-            "description": "If true, attaches the Letta base tool rules (e.g. deny all tools not explicitly allowed)."
+            "description": "If true, attaches the Letta base tool rules (e.g. deny all tools not explicitly allowed).",
+            "default": true
           },
           "include_default_source": {
             "type": "boolean",
@@ -17254,18 +17225,6 @@
             "title": "Enable Reasoner",
             "description": "Whether to enable internal extended thinking step for a reasoner model.",
             "default": false
-          },
-          "reasoning": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reasoning",
-            "description": "Whether to enable reasoning for this agent."
           },
           "from_template": {
             "anyOf": [
@@ -17962,7 +17921,7 @@
           "embedding_dim"
         ],
         "title": "EmbeddingConfig",
-        "description": "Configuration for embedding model connection and processing parameters."
+        "description": "Embedding model configuration. This object specifies all the information necessary to access an embedding model to usage with Letta, except for secret keys.\n\nAttributes:\n    embedding_endpoint_type (str): The endpoint type for the model.\n    embedding_endpoint (str): The endpoint for the model.\n    embedding_model (str): The model for the embedding.\n    embedding_dim (int): The dimension of the embedding.\n    embedding_chunk_size (int): The chunk size of the embedding.\n    azure_endpoint (:obj:`str`, optional): The Azure endpoint for the model (Azure only).\n    azure_version (str): The Azure version for the model (Azure only).\n    azure_deployment (str): The Azure deployment for the model (Azure only)."
       },
       "FeedbackType": {
         "type": "string",
@@ -19921,30 +19880,6 @@
             "title": "Callback Error",
             "description": "Optional error message from attempting to POST the callback endpoint."
           },
-          "ttft_ns": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ttft Ns",
-            "description": "Time to first token for a run in nanoseconds"
-          },
-          "total_duration_ns": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total Duration Ns",
-            "description": "Total run duration in nanoseconds"
-          },
           "id": {
             "type": "string",
             "pattern": "^(job|run)-[a-fA-F0-9]{8}",
@@ -20175,7 +20110,6 @@
               {
                 "type": "string",
                 "enum": [
-                  "minimal",
                   "low",
                   "medium",
                   "high"
@@ -20230,7 +20164,7 @@
           "context_window"
         ],
         "title": "LLMConfig",
-        "description": "Configuration for Language Model (LLM) connection and generation parameters."
+        "description": "Configuration for a Language Model (LLM) model. This object specifies all the information necessary to access an LLM model to usage with Letta, except for secret keys.\n\nAttributes:\n    model (str): The name of the LLM model.\n    model_endpoint_type (str): The endpoint type for the model.\n    model_endpoint (str): The endpoint for the model.\n    model_wrapper (str): The wrapper for the model. This is used to wrap additional text around the input/output of the model. This is useful for text-to-text completions, such as the Completions API in OpenAI.\n    context_window (int): The context window size for the model.\n    put_inner_thoughts_in_kwargs (bool): Puts `inner_thoughts` as a kwarg in the function call if this is set to True. This helps with function calling performance and also the generation of inner thoughts.\n    temperature (float): The temperature to use when generating text with the model. A higher temperature will result in more random text.\n    max_tokens (int): The maximum number of tokens to generate."
       },
       "LettaAsyncRequest": {
         "properties": {
@@ -20900,7 +20834,7 @@
             ],
             "title": "Prompt Template",
             "description": "Optional Jinja2 template for generating agent prompt about this tool rule.",
-            "default": "<tool_rule>\n{{ tool_name }}: at most {{ max_count_limit }} use(s) per response\n</tool_rule>"
+            "default": "<tool_rule>\n{{ tool_name }}: max {{ max_count_limit }} use(s) per response\n</tool_rule>"
           },
           "max_count_limit": {
             "type": "integer",
@@ -21471,61 +21405,10 @@
             ],
             "title": "Pip Requirements",
             "description": "A list of pip packages to install in the Modal sandbox"
-          },
-          "npm_requirements": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Npm Requirements",
-            "description": "A list of npm packages to install in the Modal sandbox"
-          },
-          "language": {
-            "type": "string",
-            "enum": [
-              "python",
-              "typescript"
-            ],
-            "title": "Language",
-            "default": "python"
           }
         },
         "type": "object",
         "title": "ModalSandboxConfig"
-      },
-      "NpmRequirement": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "title": "Name",
-            "description": "Name of the npm package."
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version",
-            "description": "Optional version of the package, following semantic versioning."
-          }
-        },
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "title": "NpmRequirement"
       },
       "OmittedReasoningContent": {
         "properties": {
@@ -21845,7 +21728,7 @@
             "title": "Organization Id",
             "description": "The unique identifier of the user associated with the passage."
           },
-          "archive_id": {
+          "agent_id": {
             "anyOf": [
               {
                 "type": "string"
@@ -21854,8 +21737,8 @@
                 "type": "null"
               }
             ],
-            "title": "Archive Id",
-            "description": "The unique identifier of the archive containing this passage."
+            "title": "Agent Id",
+            "description": "The unique identifier of the agent associated with the passage."
           },
           "source_id": {
             "anyOf": [
@@ -21956,7 +21839,7 @@
           "embedding_config"
         ],
         "title": "Passage",
-        "description": "Representation of a passage, which is stored in archival memory.\n\nParameters:\n    text (str): The text of the passage.\n    embedding (List[float]): The embedding of the passage.\n    embedding_config (EmbeddingConfig): The embedding configuration used by the passage.\n    created_at (datetime): The creation date of the passage.\n    organization_id (str): The unique identifier of the organization associated with the passage.\n    archive_id (str): The unique identifier of the archive containing this passage.\n    source_id (str): The data source of the passage.\n    file_id (str): The unique identifier of the file associated with the passage."
+        "description": "Representation of a passage, which is stored in archival memory.\n\nParameters:\n    text (str): The text of the passage.\n    embedding (List[float]): The embedding of the passage.\n    embedding_config (EmbeddingConfig): The embedding configuration used by the passage.\n    created_at (datetime): The creation date of the passage.\n    user_id (str): The unique identifier of the user associated with the passage.\n    agent_id (str): The unique identifier of the agent associated with the passage.\n    source_id (str): The data source of the passage.\n    file_id (str): The unique identifier of the file associated with the passage."
       },
       "PassageUpdate": {
         "properties": {
@@ -22028,7 +21911,7 @@
             "title": "Organization Id",
             "description": "The unique identifier of the user associated with the passage."
           },
-          "archive_id": {
+          "agent_id": {
             "anyOf": [
               {
                 "type": "string"
@@ -22037,8 +21920,8 @@
                 "type": "null"
               }
             ],
-            "title": "Archive Id",
-            "description": "The unique identifier of the archive containing this passage."
+            "title": "Agent Id",
+            "description": "The unique identifier of the agent associated with the passage."
           },
           "source_id": {
             "anyOf": [
@@ -22968,30 +22851,6 @@
             ],
             "title": "Callback Error",
             "description": "Optional error message from attempting to POST the callback endpoint."
-          },
-          "ttft_ns": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ttft Ns",
-            "description": "Time to first token for a run in nanoseconds"
-          },
-          "total_duration_ns": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total Duration Ns",
-            "description": "Total run duration in nanoseconds"
           },
           "id": {
             "type": "string",
@@ -24127,43 +23986,6 @@
             ],
             "title": "Project Id",
             "description": "The project that the agent that executed this step belongs to (cloud only)."
-          },
-          "error_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Type",
-            "description": "The type/class of the error that occurred"
-          },
-          "error_data": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Data",
-            "description": "Error details including message, traceback, and additional context"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/StepStatus"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Step status: pending, success, or failed",
-            "default": "pending"
           }
         },
         "additionalProperties": false,
@@ -24172,17 +23994,6 @@
           "id"
         ],
         "title": "Step"
-      },
-      "StepStatus": {
-        "type": "string",
-        "enum": [
-          "pending",
-          "success",
-          "failed",
-          "cancelled"
-        ],
-        "title": "StepStatus",
-        "description": "Status of a step execution"
       },
       "StopReasonType": {
         "type": "string",
@@ -24601,21 +24412,6 @@
             "title": "Pip Requirements",
             "description": "Optional list of pip packages required by this tool."
           },
-          "npm_requirements": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/NpmRequirement"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Npm Requirements",
-            "description": "Optional list of npm packages required by this tool."
-          },
           "created_by_id": {
             "anyOf": [
               {
@@ -24992,21 +24788,6 @@
             ],
             "title": "Pip Requirements",
             "description": "Optional list of pip packages required by this tool."
-          },
-          "npm_requirements": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/NpmRequirement"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Npm Requirements",
-            "description": "Optional list of npm packages required by this tool."
           }
         },
         "additionalProperties": false,
@@ -25398,21 +25179,6 @@
             ],
             "title": "Pip Requirements",
             "description": "Optional list of pip packages required by this tool."
-          },
-          "npm_requirements": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/NpmRequirement"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Npm Requirements",
-            "description": "Optional list of npm packages required by this tool."
           }
         },
         "additionalProperties": false,
@@ -25524,7 +25290,6 @@
           "letta_builtin",
           "letta_files_core",
           "external_composio",
-          "external_langchain",
           "external_mcp"
         ],
         "title": "ToolType"
@@ -25634,21 +25399,6 @@
             ],
             "title": "Pip Requirements",
             "description": "Optional list of pip packages required by this tool."
-          },
-          "npm_requirements": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/NpmRequirement"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Npm Requirements",
-            "description": "Optional list of npm packages required by this tool."
           }
         },
         "type": "object",
@@ -25956,18 +25706,6 @@
             ],
             "title": "Embedding",
             "description": "The embedding configuration handle used by the agent, specified in the format provider/model-name."
-          },
-          "reasoning": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reasoning",
-            "description": "Whether to enable reasoning for this agent."
           },
           "enable_sleeptime": {
             "anyOf": [
