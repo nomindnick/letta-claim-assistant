@@ -45,6 +45,9 @@ from .models import KnowledgeItem, SourceChunk
 from .letta_server import server_manager
 from .letta_config import config_manager, LettaAgentConfig
 from .letta_connection import connection_manager, ConnectionState
+from .letta_provider_bridge import letta_provider_bridge, ProviderConfiguration
+from .letta_provider_health import provider_health_monitor
+from .letta_cost_tracker import cost_tracker
 
 logger = get_logger(__name__)
 
@@ -1300,29 +1303,71 @@ Return only the questions, one per line."""
     async def _create_new_agent_async(self) -> None:
         """Create new Letta agent with construction domain configuration."""
         try:
-            # Get agent configuration from config manager
+            # Load matter preferences if available
+            matter_prefs_file = self.matter_path / "provider_preferences.json"
+            matter_preferences = {}
+            if matter_prefs_file.exists():
+                try:
+                    with open(matter_prefs_file, 'r') as f:
+                        matter_preferences = json.load(f)
+                except Exception as e:
+                    logger.debug(f"Could not load matter preferences: {e}")
+            
+            # Get provider configuration using the bridge
+            provider_config = letta_provider_bridge.get_provider_for_matter(
+                self.matter_id,
+                matter_preferences
+            )
+            
+            # Check provider health before using
+            is_healthy = await provider_health_monitor.check_provider_health(provider_config)
+            if not is_healthy:
+                logger.warning(f"Provider {provider_config.model_name} is unhealthy, trying fallback")
+                # Try to get next provider
+                next_provider = letta_provider_bridge.get_next_provider()
+                if next_provider:
+                    provider_config = next_provider
+                    is_healthy = await provider_health_monitor.check_provider_health(provider_config)
+                    if not is_healthy:
+                        logger.error("No healthy providers available")
+            
+            # Create Letta configurations using the bridge
+            llm_config_dict = letta_provider_bridge.to_letta_llm_config(provider_config)
+            embed_config_dict = letta_provider_bridge.to_letta_embedding_config(provider_config)
+            
+            if not llm_config_dict:
+                # Fallback to old method if bridge fails
+                agent_config = config_manager.get_agent_config(
+                    matter_name=self.matter_name,
+                    llm_provider="ollama",
+                    llm_model="gpt-oss:20b"
+                )
+                
+                llm_config = LlmConfig(
+                    model=agent_config.llm_model,
+                    model_endpoint_type=agent_config.llm_provider,
+                    model_endpoint=agent_config.llm_endpoint,
+                    context_window=agent_config.context_window,
+                    max_tokens=agent_config.max_tokens,
+                    temperature=agent_config.temperature
+                )
+                
+                embedding_config = EmbeddingConfig(
+                    embedding_model=agent_config.embedding_model,
+                    embedding_endpoint_type=agent_config.embedding_provider,
+                    embedding_endpoint=agent_config.embedding_endpoint,
+                    embedding_dim=agent_config.embedding_dim
+                )
+            else:
+                # Create configs from bridge output
+                llm_config = LlmConfig(**llm_config_dict)
+                embedding_config = EmbeddingConfig(**embed_config_dict) if embed_config_dict else None
+            
+            # Get agent configuration for system prompt and memory blocks
             agent_config = config_manager.get_agent_config(
                 matter_name=self.matter_name,
-                llm_provider="ollama",
-                llm_model="gpt-oss:20b"
-            )
-            
-            # Create LLM configuration
-            llm_config = LlmConfig(
-                model=agent_config.llm_model,
-                model_endpoint_type=agent_config.llm_provider,
-                model_endpoint=agent_config.llm_endpoint,
-                context_window=agent_config.context_window,
-                max_tokens=agent_config.max_tokens,
-                temperature=agent_config.temperature
-            )
-            
-            # Create embedding configuration
-            embedding_config = EmbeddingConfig(
-                embedding_model=agent_config.embedding_model,
-                embedding_endpoint_type=agent_config.embedding_provider,
-                embedding_endpoint=agent_config.embedding_endpoint,
-                embedding_dim=agent_config.embedding_dim
+                llm_provider=provider_config.provider_type,
+                llm_model=provider_config.model_name
             )
             
             # Create agent
@@ -1371,22 +1416,70 @@ Return only the questions, one per line."""
             # Build update parameters
             update_params = {}
             
-            # Handle LLM config updates
+            # Handle LLM config updates with dynamic provider selection
             if 'llm_model' in config_updates or 'llm_provider' in config_updates:
-                agent_config = config_manager.get_agent_config(
-                    matter_name=self.matter_name,
-                    llm_provider=config_updates.get('llm_provider', 'ollama'),
-                    llm_model=config_updates.get('llm_model', 'gpt-oss:20b')
-                )
+                provider_type = config_updates.get('llm_provider', 'ollama')
+                model_name = config_updates.get('llm_model', 'gpt-oss:20b')
                 
-                update_params['llm_config'] = LlmConfig(
-                    model=agent_config.llm_model,
-                    model_endpoint_type=agent_config.llm_provider,
-                    model_endpoint=agent_config.llm_endpoint,
-                    context_window=agent_config.context_window,
-                    max_tokens=agent_config.max_tokens,
-                    temperature=config_updates.get('temperature', agent_config.temperature)
-                )
+                # Get provider configuration
+                provider_config = None
+                if provider_type == "ollama":
+                    provider_config = letta_provider_bridge.get_ollama_config(model=model_name)
+                elif provider_type == "gemini":
+                    api_key = config_updates.get('api_key') or os.getenv("GEMINI_API_KEY")
+                    if api_key:
+                        provider_config = letta_provider_bridge.get_gemini_config(
+                            api_key=api_key,
+                            model=model_name
+                        )
+                elif provider_type == "openai":
+                    api_key = config_updates.get('api_key') or os.getenv("OPENAI_API_KEY")
+                    if api_key:
+                        provider_config = letta_provider_bridge.get_openai_config(
+                            api_key=api_key,
+                            model=model_name
+                        )
+                
+                if provider_config:
+                    # Check consent for external providers
+                    if provider_config.requires_consent:
+                        if not letta_provider_bridge.check_provider_consent(provider_config):
+                            logger.error(f"Consent not granted for {provider_config.model_name}")
+                            return False
+                    
+                    # Create LLM config using bridge
+                    llm_config_dict = letta_provider_bridge.to_letta_llm_config(provider_config)
+                    if llm_config_dict:
+                        update_params['llm_config'] = LlmConfig(**llm_config_dict)
+                        
+                        # Save provider preference for this matter
+                        matter_prefs_file = self.matter_path / "provider_preferences.json"
+                        matter_prefs = {
+                            "llm_provider": provider_type,
+                            "llm_model": model_name,
+                            "updated_at": datetime.now().isoformat()
+                        }
+                        try:
+                            with open(matter_prefs_file, 'w') as f:
+                                json.dump(matter_prefs, f, indent=2)
+                        except Exception as e:
+                            logger.warning(f"Could not save matter preferences: {e}")
+                else:
+                    # Fallback to old method
+                    agent_config = config_manager.get_agent_config(
+                        matter_name=self.matter_name,
+                        llm_provider=provider_type,
+                        llm_model=model_name
+                    )
+                    
+                    update_params['llm_config'] = LlmConfig(
+                        model=agent_config.llm_model,
+                        model_endpoint_type=agent_config.llm_provider,
+                        model_endpoint=agent_config.llm_endpoint,
+                        context_window=agent_config.context_window,
+                        max_tokens=agent_config.max_tokens,
+                        temperature=config_updates.get('temperature', agent_config.temperature)
+                    )
             
             # Handle system prompt updates
             if 'system_prompt' in config_updates:
@@ -2229,3 +2322,282 @@ Return only the questions, one per line."""
                 "Error checking existing data (non-critical)",
                 error=str(e)
             )
+    
+    # Provider management methods
+    async def switch_provider(
+        self,
+        provider_type: str,
+        model_name: Optional[str] = None,
+        api_key: Optional[str] = None
+    ) -> bool:
+        """
+        Switch to a different LLM provider for this agent.
+        
+        Args:
+            provider_type: Provider type (ollama, gemini, openai, anthropic)
+            model_name: Optional model name
+            api_key: Optional API key for external providers
+            
+        Returns:
+            True if switch successful
+        """
+        config_updates = {
+            "llm_provider": provider_type
+        }
+        
+        if model_name:
+            config_updates["llm_model"] = model_name
+        if api_key:
+            config_updates["api_key"] = api_key
+        
+        # Use update_agent to perform the switch
+        success = await self.update_agent(config_updates)
+        
+        if success:
+            logger.info(
+                f"Switched provider for {self.matter_name}",
+                provider=provider_type,
+                model=model_name
+            )
+        
+        return success
+    
+    async def get_provider_info(self) -> Dict[str, Any]:
+        """
+        Get current provider information for this agent.
+        
+        Returns:
+            Dictionary with provider details
+        """
+        # Load matter preferences
+        matter_prefs_file = self.matter_path / "provider_preferences.json"
+        matter_preferences = {}
+        if matter_prefs_file.exists():
+            try:
+                with open(matter_prefs_file, 'r') as f:
+                    matter_preferences = json.load(f)
+            except Exception:
+                pass
+        
+        # Get current provider config
+        provider_config = letta_provider_bridge.get_provider_for_matter(
+            self.matter_id,
+            matter_preferences
+        )
+        
+        # Get health status
+        health_metrics = provider_health_monitor.get_provider_health(provider_config.model_name)
+        
+        return {
+            "provider_type": provider_config.provider_type,
+            "model_name": provider_config.model_name,
+            "is_local": provider_config.is_local,
+            "requires_consent": provider_config.requires_consent,
+            "context_window": provider_config.context_window,
+            "max_tokens": provider_config.max_tokens,
+            "health_status": health_metrics.status.value if health_metrics else "unknown",
+            "average_response_time_ms": health_metrics.get_average_response_time() if health_metrics else None,
+            "success_rate": health_metrics.get_success_rate() if health_metrics else None,
+            "cost_per_1k_input": provider_config.cost_per_1k_input_tokens,
+            "cost_per_1k_output": provider_config.cost_per_1k_output_tokens
+        }
+    
+    async def test_provider_configuration(
+        self,
+        provider_type: str,
+        model_name: str,
+        api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Test a provider configuration without switching.
+        
+        Args:
+            provider_type: Provider type to test
+            model_name: Model name to test
+            api_key: Optional API key
+            
+        Returns:
+            Test results dictionary
+        """
+        try:
+            # Create provider config
+            if provider_type == "ollama":
+                provider_config = letta_provider_bridge.get_ollama_config(model=model_name)
+            elif provider_type == "gemini":
+                if not api_key:
+                    return {"success": False, "error": "API key required for Gemini"}
+                provider_config = letta_provider_bridge.get_gemini_config(
+                    api_key=api_key,
+                    model=model_name
+                )
+            elif provider_type == "openai":
+                if not api_key:
+                    return {"success": False, "error": "API key required for OpenAI"}
+                provider_config = letta_provider_bridge.get_openai_config(
+                    api_key=api_key,
+                    model=model_name
+                )
+            else:
+                return {"success": False, "error": f"Unknown provider type: {provider_type}"}
+            
+            # Check consent if required
+            if provider_config.requires_consent:
+                if not letta_provider_bridge.check_provider_consent(provider_config):
+                    return {
+                        "success": False,
+                        "error": "Consent required for external provider",
+                        "requires_consent": True
+                    }
+            
+            # Test provider health
+            is_healthy = await provider_health_monitor.check_provider_health(provider_config)
+            
+            # Try to create configs
+            llm_config_dict = letta_provider_bridge.to_letta_llm_config(provider_config)
+            embed_config_dict = letta_provider_bridge.to_letta_embedding_config(provider_config)
+            
+            return {
+                "success": is_healthy and llm_config_dict is not None,
+                "is_healthy": is_healthy,
+                "config_valid": llm_config_dict is not None,
+                "has_embeddings": embed_config_dict is not None,
+                "provider_type": provider_type,
+                "model_name": model_name
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "provider_type": provider_type,
+                "model_name": model_name
+            }
+    
+    async def setup_provider_fallback(
+        self,
+        primary: Dict[str, Any],
+        secondary: Optional[Dict[str, Any]] = None,
+        tertiary: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """
+        Set up provider fallback chain for this matter.
+        
+        Args:
+            primary: Primary provider config {"provider": "ollama", "model": "gpt-oss:20b", "api_key": null}
+            secondary: Optional secondary provider config
+            tertiary: Optional tertiary provider config
+            
+        Returns:
+            True if setup successful
+        """
+        try:
+            # Create provider configurations
+            configs = []
+            
+            for provider_spec in [primary, secondary, tertiary]:
+                if not provider_spec:
+                    continue
+                
+                provider_type = provider_spec.get("provider")
+                model_name = provider_spec.get("model")
+                api_key = provider_spec.get("api_key")
+                
+                if provider_type == "ollama":
+                    config = letta_provider_bridge.get_ollama_config(model=model_name)
+                elif provider_type == "gemini" and api_key:
+                    config = letta_provider_bridge.get_gemini_config(api_key=api_key, model=model_name)
+                elif provider_type == "openai" and api_key:
+                    config = letta_provider_bridge.get_openai_config(api_key=api_key, model=model_name)
+                else:
+                    logger.warning(f"Invalid provider spec: {provider_spec}")
+                    continue
+                
+                configs.append(config)
+            
+            if not configs:
+                logger.error("No valid provider configurations")
+                return False
+            
+            # Set up fallback chain
+            letta_provider_bridge.setup_fallback_chain(
+                primary=configs[0],
+                secondary=configs[1] if len(configs) > 1 else None,
+                tertiary=configs[2] if len(configs) > 2 else None
+            )
+            
+            # Save fallback configuration for this matter
+            fallback_file = self.matter_path / "fallback_config.json"
+            fallback_data = {
+                "primary": primary,
+                "secondary": secondary,
+                "tertiary": tertiary,
+                "configured_at": datetime.now().isoformat()
+            }
+            
+            try:
+                with open(fallback_file, 'w') as f:
+                    json.dump(fallback_data, f, indent=2)
+            except Exception as e:
+                logger.warning(f"Could not save fallback config: {e}")
+            
+            logger.info(
+                f"Configured fallback chain for {self.matter_name}",
+                chain_length=len(configs)
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to set up provider fallback: {e}")
+            return False
+    
+    async def get_usage_stats(self, days: int = 30) -> Dict[str, Any]:
+        """
+        Get usage statistics for this matter.
+        
+        Args:
+            days: Number of days to include
+            
+        Returns:
+            Usage statistics dictionary
+        """
+        return cost_tracker.get_usage_summary(
+            matter_id=self.matter_id,
+            days=days
+        )
+    
+    async def set_spending_limit(
+        self,
+        limit_usd: float,
+        period: str = "monthly"
+    ) -> bool:
+        """
+        Set spending limit for this matter.
+        
+        Args:
+            limit_usd: Maximum spending in USD
+            period: Period type (daily, weekly, monthly, total)
+            
+        Returns:
+            True if limit set successfully
+        """
+        try:
+            from .letta_cost_tracker import CostPeriod
+            
+            period_enum = CostPeriod(period)
+            cost_tracker.set_spending_limit(
+                period=period_enum,
+                limit_usd=limit_usd,
+                warning_threshold=0.8
+            )
+            
+            logger.info(
+                f"Set {period} spending limit for {self.matter_name}",
+                limit=limit_usd
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to set spending limit: {e}")
+            return False
