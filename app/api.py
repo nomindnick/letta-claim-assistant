@@ -1589,10 +1589,10 @@ async def get_letta_health():
         connection_metrics = connection_manager.get_metrics()
         
         # Get server status
-        server_status = await server_manager.check_health()
+        server_status = server_manager.health_check()
         
         # Get provider health
-        provider_status = provider_health_monitor.get_all_provider_status()
+        provider_status = provider_health_monitor.get_health_summary()
         
         return {
             "status": "healthy" if connection_state == "connected" else "degraded",
@@ -1602,7 +1602,7 @@ async def get_letta_health():
             },
             "server": {
                 "running": server_status,
-                "url": server_manager.get_server_url() if server_status else None
+                "url": server_manager.get_base_url() if server_status else None
             },
             "providers": provider_status,
             "timestamp": datetime.now().isoformat()

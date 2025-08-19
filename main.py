@@ -19,6 +19,15 @@ from pathlib import Path
 from typing import Optional
 import threading
 import uvicorn
+import multiprocessing
+
+# Set multiprocessing start method to 'spawn' to avoid fork/spawn context issues
+# This must be done before any other imports that might use multiprocessing
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # Already set
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -88,19 +97,43 @@ def setup_application() -> bool:
         return False
 
 
+def get_available_port(start_port=8000, max_attempts=100):
+    """Find an available port starting from start_port."""
+    import socket
+    
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('127.0.0.1', port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No available ports found in range {start_port}-{start_port + max_attempts}")
+
+
 def start_backend_server():
     """Start the FastAPI backend server in a separate thread."""
     logger = get_logger(__name__)
     logger.info("Starting FastAPI backend server")
     
+    # Find an available port
+    port = get_available_port(8000)
+    
+    if port != 8000:
+        logger.info(f"Port 8000 is in use, using port {port} instead")
+    
     # Configure uvicorn for embedded use
     config = uvicorn.Config(
         fastapi_app,
         host="127.0.0.1",
-        port=8000,
+        port=port,
         log_level="info",
         access_log=False  # Reduce noise in logs
     )
+    
+    # Store the port for the UI to use
+    import os
+    os.environ['BACKEND_PORT'] = str(port)
     
     server = uvicorn.Server(config)
     server.run()

@@ -422,7 +422,7 @@ class LettaClaimUI:
     
     async def _on_provider_changed(self, e):
         """Handle provider selection change."""
-        provider = e.get('value', 'ollama')
+        provider = e.value if hasattr(e, 'value') else 'ollama'
         
         if provider == 'gemini':
             self.api_key_input.classes(remove='hidden')
@@ -1401,21 +1401,68 @@ def create_ui_app():
     async def index():
         await create_app()
     
-    # Run the application
+    # Find an available port for UI
+    import socket
+    def get_free_port(start=8080):
+        for port in range(start, start + 100):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                try:
+                    s.bind(('127.0.0.1', port))
+                    return port
+                except OSError:
+                    continue
+        return start
+    
+    ui_port = get_free_port()
+    
+    # Check if native mode dependencies are available
+    native_mode_available = False
     try:
-        # Try native desktop mode first
+        import gi
+        native_mode_available = True
+        logger.info("GTK available for native mode")
+    except ImportError:
+        try:
+            import qtpy
+            native_mode_available = True
+            logger.info("Qt available for native mode")
+        except ImportError:
+            logger.info("No GUI libraries found, will use browser mode")
+    
+    # Run the application
+    if native_mode_available:
+        try:
+            # Try native desktop mode
+            ui.run(
+                native=True,
+                host='127.0.0.1',
+                port=ui_port,
+                window_size=(1400, 900),
+                title="Letta Construction Claim Assistant",
+                reload=False,
+                show=True,
+                on_air=False
+            )
+        except Exception as e:
+            logger.warning(f"Native mode failed despite libraries, falling back to browser: {e}")
+            # Fallback to browser mode
+            ui.run(
+                native=False,
+                host='127.0.0.1',
+                port=ui_port,
+                title="Letta Construction Claim Assistant",
+                reload=False
+            )
+    else:
+        # Run directly in browser mode if no GUI libraries
+        logger.info(f"Starting in browser mode on http://127.0.0.1:{ui_port}")
         ui.run(
-            native=True,
-            window_size=(1400, 900),
-            title="Letta Construction Claim Assistant"
-        )
-    except Exception as e:
-        logger.warning(f"Native desktop mode failed, falling back to browser: {e}")
-        # Fallback to browser mode
-        ui.run(
-            host='localhost',
-            port=8080,
-            title="Letta Construction Claim Assistant"
+            native=False,
+            host='127.0.0.1',
+            port=ui_port,
+            title="Letta Construction Claim Assistant",
+            reload=False,
+            show=True  # Auto-open browser
         )
 
 
