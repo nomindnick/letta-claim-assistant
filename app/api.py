@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 import json
 import time
 import traceback
+from datetime import datetime
 
 from .models import (
     CreateMatterRequest, CreateMatterResponse, MatterSummary,
@@ -1533,6 +1534,123 @@ async def get_advanced_features_status(matter_id: str):
     except Exception as e:
         logger.error(f"Failed to get advanced features status: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get advanced features status: {str(e)}")
+
+
+# Letta Memory and Agent Endpoints
+@app.get("/api/matters/{matter_id}/memory/stats")
+async def get_memory_stats(matter_id: str):
+    """Get Letta agent memory statistics for a matter."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_path=matter.paths.root,
+            matter_name=matter.name,
+            matter_id=matter.id
+        )
+        
+        # Get memory stats
+        stats = await letta_adapter.get_memory_stats()
+        
+        # Add additional context
+        stats["matter_name"] = matter.name
+        stats["matter_id"] = matter.id
+        
+        return stats
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get memory stats: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e),
+            "memory_items": 0,
+            "matter_name": matter.name if matter else "Unknown",
+            "matter_id": matter_id
+        }
+
+
+@app.get("/api/letta/health")
+async def get_letta_health():
+    """Get Letta server and connection health status."""
+    try:
+        from .letta_connection import connection_manager
+        from .letta_server import server_manager
+        from .letta_provider_health import provider_health_monitor
+        
+        # Get connection state and metrics
+        connection_state = connection_manager.get_state().value
+        connection_metrics = connection_manager.get_metrics()
+        
+        # Get server status
+        server_status = await server_manager.check_health()
+        
+        # Get provider health
+        provider_status = provider_health_monitor.get_all_provider_status()
+        
+        return {
+            "status": "healthy" if connection_state == "connected" else "degraded",
+            "connection": {
+                "state": connection_state,
+                "metrics": connection_metrics
+            },
+            "server": {
+                "running": server_status,
+                "url": server_manager.get_server_url() if server_status else None
+            },
+            "providers": provider_status,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get Letta health: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e),
+            "connection": {"state": "error"},
+            "server": {"running": False},
+            "providers": {},
+            "timestamp": datetime.now().isoformat()
+        }
+
+
+@app.post("/api/matters/{matter_id}/memory/summary")
+async def get_memory_summary(matter_id: str, max_length: Optional[int] = 500):
+    """Get a summary of the agent's memory for a matter."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_path=matter.paths.root,
+            matter_name=matter.name,
+            matter_id=matter.id
+        )
+        
+        # Get memory summary
+        summary = await letta_adapter.get_memory_summary(max_length=max_length)
+        
+        return {
+            "summary": summary,
+            "matter_id": matter_id,
+            "matter_name": matter.name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get memory summary: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get memory summary: {str(e)}")
 
 
 # Health check endpoint

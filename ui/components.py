@@ -420,9 +420,10 @@ class DocumentUploader:
             await self.on_upload(e)
 
 
-# Custom CSS for animations
+# Custom CSS for animations and visual polish
 ANIMATION_CSS = """
 <style>
+/* Enhanced animations */
 @keyframes fade-in {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
@@ -438,6 +439,29 @@ ANIMATION_CSS = """
     50% { opacity: 0.7; }
 }
 
+@keyframes pulse-glow {
+    0% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4); }
+    50% { box-shadow: 0 0 20px 10px rgba(168, 85, 247, 0.2); }
+    100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4); }
+}
+
+@keyframes thinking-dots {
+    0%, 20% { content: '.'; }
+    40% { content: '..'; }
+    60%, 100% { content: '...'; }
+}
+
+@keyframes shimmer {
+    0% { background-position: -1000px 0; }
+    100% { background-position: 1000px 0; }
+}
+
+@keyframes spin-smooth {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Animation classes */
 .animate-fade-in {
     animation: fade-in 0.3s ease-out;
 }
@@ -450,13 +474,149 @@ ANIMATION_CSS = """
     animation: pulse-soft 2s infinite;
 }
 
-.transition-all {
-    transition: all 0.3s ease;
+.animate-pulse-glow {
+    animation: pulse-glow 2s infinite;
 }
 
+.animate-spin-smooth {
+    animation: spin-smooth 1s linear infinite;
+}
+
+.animate-thinking::after {
+    content: '.';
+    animation: thinking-dots 1.5s infinite;
+}
+
+/* Smooth transitions */
+.transition-all {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.transition-fast {
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.transition-colors {
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+/* Hover effects */
 .hover-lift:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.hover-glow:hover {
+    box-shadow: 0 0 20px rgba(168, 85, 247, 0.3);
+}
+
+.hover-scale:hover {
+    transform: scale(1.02);
+}
+
+/* Skeleton loading */
+.skeleton-shimmer {
+    background: linear-gradient(
+        90deg,
+        #f0f0f0 25%,
+        #e0e0e0 50%,
+        #f0f0f0 75%
+    );
+    background-size: 1000px 100%;
+    animation: shimmer 2s infinite;
+}
+
+/* Glass morphism */
+.glass-morphism {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Smooth scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 10px;
+    transition: background 0.2s;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Focus indicators */
+.focus-ring:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.3);
+}
+
+/* Gradient backgrounds */
+.gradient-purple {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.gradient-blue {
+    background: linear-gradient(135deg, #667eea 0%, #4facfe 100%);
+}
+
+.gradient-green {
+    background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+}
+
+/* Card shadows */
+.card-shadow {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1),
+               0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.card-shadow-lg {
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
+               0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+/* Status indicators */
+.status-online::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #10b981;
+    margin-right: 4px;
+    animation: pulse-soft 2s infinite;
+}
+
+.status-offline::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #ef4444;
+    margin-right: 4px;
+}
+
+/* Memory badge glow */
+.memory-active {
+    box-shadow: 0 0 15px rgba(168, 85, 247, 0.5);
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+/* Smooth appearance */
+.smooth-appear {
+    opacity: 0;
+    animation: fade-in 0.5s ease-out forwards;
 }
 </style>
 """

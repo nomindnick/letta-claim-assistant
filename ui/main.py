@@ -27,6 +27,15 @@ from ui.components import (
     NotificationManager, KeyboardShortcuts, SearchInput, ThinkingIndicator,
     DocumentUploader, inject_animations
 )
+from ui.memory_components import (
+    MemoryStatusBadge, MemoryStatsDashboard, AgentHealthIndicator,
+    MemoryOperationToast, MemoryContextTooltip
+)
+from ui.performance import (
+    chat_debouncer, search_debouncer, response_cache,
+    lazy_loader, with_loading_state, measure_performance
+)
+from ui.error_messages import ErrorMessageHandler, handle_ui_error
 from app.logging_conf import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -58,6 +67,12 @@ class LettaClaimUI:
         self.keyboard_shortcuts = KeyboardShortcuts()
         self.thinking_indicator = ThinkingIndicator()
         self.current_progress_bar = None
+        
+        # Memory components
+        self.memory_badge = MemoryStatusBadge()
+        self.memory_dashboard = MemoryStatsDashboard()
+        self.agent_health = AgentHealthIndicator()
+        self.memory_stats_timer = None
         
         # UI state
         self.is_processing = False
@@ -109,8 +124,18 @@ class LettaClaimUI:
             # Start background job polling
             ui.timer(2.0, self._poll_job_status)
             
+            # Start memory stats refresh timer
+            ui.timer(30.0, self._refresh_memory_stats)
+            
+            # Start agent health monitoring
+            ui.timer(10.0, self._update_agent_health)
+            
             # Initialize consent checking for any existing external providers
             await self._check_provider_consent_status()
+            
+            # Initial memory stats load
+            await self._refresh_memory_stats()
+            await self._update_agent_health()
             
             # Show welcome notification
             self.notification_manager.success("Application loaded successfully!")
@@ -248,8 +273,11 @@ class LettaClaimUI:
                     self.upload_widget.props('disable')
                     ui.label('Select a Matter to upload documents').classes('text-xs text-gray-500')
             
+            # Memory Statistics Dashboard
+            self.memory_dashboard.create()
+            
             # Document list
-            with ui.card().classes('w-full flex-1'):
+            with ui.card().classes('w-full flex-1 mt-4'):
                 ui.label('Document Status').classes('font-semibold mb-2')
                 self.document_list = ui.column().classes('w-full')
                 await self._refresh_document_list()
@@ -257,13 +285,20 @@ class LettaClaimUI:
     async def _create_center_pane(self):
         """Create the center pane with chat interface."""
         with ui.column().classes('w-1/2 h-full p-4'):
-            # Header with settings button
+            # Header with settings button and agent health
             with ui.row().classes('w-full justify-between items-center mb-4'):
-                ui.label('Chat').classes('text-lg font-bold')
-                ui.button(
-                    icon='settings',
-                    on_click=self._toggle_settings_drawer
-                ).props('flat round')
+                with ui.row().classes('items-center gap-3'):
+                    ui.label('Chat').classes('text-lg font-bold')
+                    # Add memory status badge here
+                    self.memory_badge.create()
+                
+                with ui.row().classes('items-center gap-2'):
+                    # Agent health indicator
+                    self.agent_health.create()
+                    ui.button(
+                        icon='settings',
+                        on_click=self._toggle_settings_drawer
+                    ).props('flat round')
             
             # Chat messages area
             with ui.card().classes('w-full flex-1 mb-4'):
@@ -771,8 +806,9 @@ class LettaClaimUI:
         """Handle rejected file uploads."""
         ui.notify("File upload rejected. Please ensure files are PDFs under 100MB.", type="negative")
     
-    def _on_input_change(self, e):
-        """Handle chat input change."""
+    @chat_debouncer.debounce
+    async def _on_input_change(self, e):
+        """Handle chat input change with debouncing."""
         # Enable/disable send button based on input
         has_text = bool(e.value and e.value.strip())
         if has_text:
@@ -780,6 +816,10 @@ class LettaClaimUI:
             self.send_button.props(remove='disable')
         else:
             self.send_button.props('disable')
+        
+        # Could add input suggestions here in the future
+        # if has_text and len(e.value) > 3:
+        #     suggestions = await self._get_input_suggestions(e.value)
     
     async def _send_message(self):
         """Send chat message."""
@@ -809,6 +849,10 @@ class LettaClaimUI:
         with self.chat_messages:
             await self._add_message_to_display(user_message)
         
+        # Show memory status - recalling
+        self.memory_badge.show_active("Recalling Memory")
+        MemoryOperationToast.show_recalling()
+        
         # Show thinking indicator
         with self.chat_messages:
             thinking_card = ui.card().classes('w-full mb-2 bg-gray-50')
@@ -827,6 +871,14 @@ class LettaClaimUI:
             # Remove thinking indicator
             thinking_card.delete()
             
+            # Check if memory was used
+            used_memory = response.get('used_memory', [])
+            if used_memory:
+                self.memory_badge.show_enhanced()
+                MemoryOperationToast.show_success("Memory enhanced response")
+            else:
+                self.memory_badge.hide()
+            
             # Add assistant message to chat history
             assistant_message = {
                 "role": "assistant",
@@ -834,7 +886,7 @@ class LettaClaimUI:
                 "timestamp": datetime.now().isoformat(),
                 "sources": response.get('sources', []),
                 "followups": response.get('followups', []),
-                "used_memory": response.get('used_memory', [])
+                "used_memory": used_memory
             }
             self.chat_history.append(assistant_message)
             
@@ -848,8 +900,20 @@ class LettaClaimUI:
             # Update sources panel
             await self._update_sources_panel(response.get('sources', []))
             
+            # Store interaction in memory (show storing indicator)
+            if used_memory:
+                self.memory_badge.show_active("Storing to Memory")
+                MemoryOperationToast.show_storing()
+                await asyncio.sleep(1.5)  # Simulate storing
+                self.memory_badge.show_enhanced()
+            
+            # Refresh memory stats
+            await self._refresh_memory_stats()
+            
         except Exception as e:
             thinking_card.delete()
+            self.memory_badge.hide()
+            MemoryOperationToast.show_error(f"Failed: {str(e)}")
             logger.error("Failed to send message", error=str(e))
             ui.notify(f"Failed to send message: {str(e)}", type="negative")
     
@@ -1019,16 +1083,23 @@ class LettaClaimUI:
             time_str = ""
         
         if role == "user":
-            # User message
-            with ui.card().classes('w-full mb-2 bg-blue-50'):
+            # User message with smooth animation
+            with ui.card().classes('w-full mb-2 bg-blue-50 animate-fade-in hover-lift transition-all'):
                 with ui.row().classes('w-full justify-between items-start'):
                     ui.markdown(f"**You:** {content}")
                     if time_str:
                         ui.label(time_str).classes('text-xs text-gray-500')
         
         elif role == "assistant":
-            # Assistant message
-            with ui.card().classes('w-full mb-2 bg-green-50'):
+            # Assistant message with smooth animation and memory indicator
+            card_classes = 'w-full mb-2 bg-green-50 animate-slide-up hover-lift transition-all'
+            
+            # Add memory glow if memory was used
+            used_memory = message.get('used_memory', [])
+            if used_memory:
+                card_classes += ' memory-active'
+            
+            with ui.card().classes(card_classes):
                 with ui.column().classes('w-full'):
                     with ui.row().classes('w-full justify-between items-start'):
                         ui.markdown(f"**Assistant:**\n\n{content}")
@@ -1234,6 +1305,50 @@ class LettaClaimUI:
         
         except Exception as e:
             logger.error("Failed to refresh provider settings", error=str(e))
+    
+    @response_cache.cached
+    @measure_performance
+    async def _refresh_memory_stats(self):
+        """Refresh memory statistics for current matter with caching."""
+        if not self.current_matter:
+            return
+        
+        try:
+            # Get memory stats from API (cached)
+            stats = await self.api_client.get(f"api/matters/{self.current_matter['id']}/memory/stats")
+            
+            # Update dashboard
+            if stats and self.memory_dashboard:
+                await self.memory_dashboard.update_stats(stats)
+            
+            logger.debug("Memory stats refreshed", stats=stats)
+            
+        except Exception as e:
+            logger.error("Failed to refresh memory stats", error=str(e))
+            ErrorMessageHandler.show_error(
+                'memory_unavailable',
+                additional_info=str(e)
+            )
+    
+    @response_cache.cached
+    @measure_performance
+    async def _update_agent_health(self):
+        """Update agent health indicator with caching."""
+        try:
+            # Get health status from API (cached)
+            health = await self.api_client.get("api/letta/health")
+            
+            # Update health indicator
+            if health and self.agent_health:
+                self.agent_health.update_health(health)
+            
+            logger.debug("Agent health updated", health=health)
+            
+        except Exception as e:
+            logger.error("Failed to update agent health", error=str(e))
+            # Show degraded status on error
+            if self.agent_health:
+                self.agent_health.update_health({"status": "error"})
     
     async def _test_provider_with_consent(self, provider_type: str, generation_model: str, api_key: str = None):
         """Test provider with consent checking."""
