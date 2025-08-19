@@ -762,19 +762,17 @@ class LettaClaimUI:
             return
         
         try:
-            # Convert uploaded files to temp files
-            uploaded_files = []
-            for file_info in e.files:
-                # Save to temp file
-                temp_file = tempfile.NamedTemporaryFile(
-                    suffix='.pdf',
-                    delete=False,
-                    prefix=f"upload_{file_info.name}_"
-                )
-                temp_file.write(file_info.content)
-                temp_file.close()
-                
-                uploaded_files.append(Path(temp_file.name))
+            # In NiceGUI, the upload event has content and name directly
+            # Save to temp file
+            temp_file = tempfile.NamedTemporaryFile(
+                suffix='.pdf',
+                delete=False,
+                prefix=f"upload_{e.name}_"
+            )
+            temp_file.write(e.content.read())
+            temp_file.close()
+            
+            uploaded_files = [Path(temp_file.name)]
             
             # Submit upload job
             job_id = await self.api_client.upload_files(
@@ -783,20 +781,19 @@ class LettaClaimUI:
             )
             
             # Track upload job
-            for i, file_info in enumerate(e.files):
-                self.upload_jobs[f"{job_id}_{i}"] = {
-                    'job_id': job_id,
-                    'matter_id': self.current_matter['id'],
-                    'filename': file_info.name,
-                    'status': 'queued',
-                    'progress': 0.0,
-                    'message': 'Queued for processing'
-                }
+            self.upload_jobs[f"{job_id}_0"] = {
+                'job_id': job_id,
+                'matter_id': self.current_matter['id'],
+                'filename': e.name,
+                'status': 'queued',
+                'progress': 0.0,
+                'message': 'Queued for processing'
+            }
             
             # Refresh document list
             await self._refresh_document_list()
             
-            ui.notify(f"Uploaded {len(e.files)} file(s) for processing", type="positive")
+            ui.notify(f"Uploaded {e.name} for processing", type="positive")
             
         except Exception as e:
             logger.error("Failed to upload files", error=str(e))
