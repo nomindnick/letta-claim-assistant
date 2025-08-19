@@ -264,3 +264,150 @@ def large_document():
             "file_size": 5000000  # 5MB
         }
     }
+
+
+# Letta-specific fixtures
+@pytest.fixture
+def mock_letta_client():
+    """Mock Letta client for testing."""
+    from unittest.mock import AsyncMock
+    
+    client = AsyncMock()
+    
+    # Mock health check
+    client.health.check.return_value = None
+    
+    # Mock agent operations
+    client.agents.create.return_value = Mock(id="test-agent-123", name="test-agent")
+    client.agents.retrieve.return_value = Mock(id="test-agent-123", name="test-agent")
+    client.agents.delete.return_value = None
+    client.agents.list.return_value = []
+    
+    # Mock memory operations
+    client.agents.search_archival_memory.return_value = []
+    client.agents.insert_archival_memory.return_value = Mock(id="mem-123")
+    client.agents.get_archival_memory.return_value = []
+    
+    return client
+
+
+@pytest.fixture
+def mock_letta_server():
+    """Mock Letta server manager for testing."""
+    from unittest.mock import MagicMock
+    
+    server = MagicMock()
+    server._is_running = True
+    server.port = 8283
+    server.host = "localhost"
+    server.get_base_url.return_value = "http://localhost:8283"
+    server.start.return_value = True
+    server.stop.return_value = True
+    
+    return server
+
+
+@pytest.fixture
+def mock_circuit_breaker():
+    """Mock circuit breaker for testing."""
+    from app.letta_circuit_breaker import CircuitBreaker, CircuitState
+    
+    breaker = CircuitBreaker(
+        name="test_breaker",
+        failure_threshold=3,
+        success_threshold=2,
+        timeout=1.0
+    )
+    return breaker
+
+
+@pytest.fixture
+def mock_request_queue():
+    """Mock request queue for testing."""
+    from app.letta_request_queue import RequestQueue
+    
+    queue = RequestQueue(
+        max_queue_size=100,
+        batch_size=10,
+        batch_timeout=0.5
+    )
+    return queue
+
+
+@pytest.fixture
+async def letta_test_adapter(test_matter):
+    """Create test Letta adapter with mocked client."""
+    from app.letta_adapter import LettaAdapter
+    from unittest.mock import patch, AsyncMock
+    
+    with patch('app.letta_adapter.AsyncLetta') as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client_class.return_value = mock_client
+        
+        # Mock successful initialization
+        mock_client.agents.create.return_value = Mock(id="test-agent")
+        mock_client.health.check.return_value = None
+        
+        adapter = LettaAdapter(test_matter)
+        await adapter.initialize()
+        
+        yield adapter
+
+
+@pytest.fixture
+def letta_knowledge_items():
+    """Sample knowledge items for Letta testing."""
+    return [
+        {
+            "type": "Entity",
+            "label": "ABC Construction Inc.",
+            "actors": ["General Contractor"],
+            "doc_refs": [{"doc": "contract.pdf", "page": 1}]
+        },
+        {
+            "type": "Event",
+            "label": "Foundation failure",
+            "date": "2024-02-14",
+            "actors": ["ABC Construction Inc."],
+            "doc_refs": [{"doc": "incident_report.pdf", "page": 3}],
+            "support_snippet": "Significant cracking observed in foundation"
+        },
+        {
+            "type": "Issue",
+            "label": "Delay claim for weather",
+            "date": "2024-03-01",
+            "actors": ["ABC Construction Inc.", "Owner"],
+            "doc_refs": [{"doc": "claim.pdf", "page": 1}]
+        },
+        {
+            "type": "Fact",
+            "label": "Project completion date extended by 30 days",
+            "date": "2024-03-15",
+            "doc_refs": [{"doc": "change_order.pdf", "page": 2}]
+        }
+    ]
+
+
+@pytest.fixture
+def letta_memory_data():
+    """Sample memory data for testing."""
+    return {
+        "conversations": [
+            {
+                "timestamp": "2024-01-01T10:00:00",
+                "user": "What caused the foundation failure?",
+                "assistant": "The foundation failure was caused by inadequate soil preparation.",
+                "sources": ["report.pdf p.5-7"]
+            }
+        ],
+        "facts": [
+            "Foundation failure occurred on 2024-02-14",
+            "ABC Construction was the general contractor",
+            "Weather delays totaled 15 days"
+        ],
+        "entities": {
+            "contractors": ["ABC Construction Inc.", "XYZ Subcontractor"],
+            "owners": ["Property Owner LLC"],
+            "dates": ["2024-02-14", "2024-03-01", "2024-03-15"]
+        }
+    }

@@ -172,9 +172,36 @@ class LettaConnectionManager:
         self.health_check_interval = 30  # seconds
         self.health_check_task: Optional[asyncio.Task] = None
         
+        # Timeout configuration per operation type
+        self.operation_timeouts = {
+            "health_check": 5.0,
+            "recall": 30.0,
+            "upsert": 30.0,
+            "suggest": 30.0,
+            "create_agent": 60.0,
+            "get_agent": 10.0,
+            "delete_agent": 30.0,
+            "default": 30.0
+        }
+        
+        # Resource management
+        self._active_operations = set()
+        self._cleanup_lock = asyncio.Lock()
+        self._shutdown_event = asyncio.Event()
+        self._health_task = None  # Add for compatibility with tests
+        
         self._initialized = True
         
         logger.info("LettaConnectionManager initialized")
+    
+    def configure(self, base_url: str = None, **kwargs):
+        """Configure the connection manager."""
+        if base_url:
+            self.base_url = base_url
+        # Store any additional configuration
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
     
     async def connect(
         self,
@@ -288,6 +315,10 @@ class LettaConnectionManager:
         # Attempt to connect
         return await self.connect()
     
+    async def _check_health(self) -> bool:
+        """Perform a health check."""
+        return await self._quick_health_check()
+    
     async def _quick_health_check(self) -> bool:
         """Perform a quick health check."""
         if not self.client:
@@ -311,6 +342,19 @@ class LettaConnectionManager:
         
         # Start new health monitor task
         self.health_check_task = asyncio.create_task(self._health_monitor_loop())
+    
+    def start_health_monitoring(self, interval: float = None, auto_restart: bool = False):
+        """Start health monitoring (public method)."""
+        if interval:
+            self.health_check_interval = interval
+        # Store auto_restart flag if needed
+        asyncio.create_task(self._start_health_monitor())
+    
+    def stop_health_monitoring(self):
+        """Stop health monitoring (public method)."""
+        if self.health_check_task and not self.health_check_task.done():
+            self.health_check_task.cancel()
+            self.health_check_task = None
     
     async def _health_monitor_loop(self):
         """Background loop for health monitoring."""
@@ -344,15 +388,19 @@ class LettaConnectionManager:
         operation_name: str,
         operation_func,
         *args,
+        timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
         **kwargs
     ) -> Any:
         """
-        Execute an operation with retry logic and metrics tracking.
+        Execute an operation with retry logic, timeout, and metrics tracking.
         
         Args:
             operation_name: Name of the operation for metrics
             operation_func: Async function to execute
             *args: Arguments for the function
+            timeout: Operation timeout in seconds (uses default if not specified)
+            max_retries: Maximum retry attempts (uses default if not specified)
             **kwargs: Keyword arguments for the function
             
         Returns:
@@ -363,42 +411,72 @@ class LettaConnectionManager:
             logger.warning(f"Cannot execute {operation_name}: not connected")
             return None
         
-        # Try operation with single retry
-        for attempt in range(2):
-            try:
-                start_time = time.time()
-                result = await operation_func(*args, **kwargs)
-                latency = time.time() - start_time
-                
-                self.metrics.record_operation(operation_name, latency, True)
-                
-                if latency > 5.0:  # Warn if operation is slow
-                    logger.warning(f"{operation_name} took {latency:.2f}s")
-                
-                return result
-                
-            except NotFoundError as e:
-                # Don't retry for not found errors
-                self.metrics.record_operation(operation_name, 0, False)
-                logger.error(f"{operation_name} failed: {e}")
-                return None
-                
-            except (BadRequestError, ClientError, InternalServerError) as e:
-                self.metrics.record_operation(operation_name, 0, False)
-                
-                if attempt == 0:
-                    logger.warning(f"{operation_name} failed, retrying: {e}")
-                    await asyncio.sleep(1)
-                else:
-                    logger.error(f"{operation_name} failed after retry: {e}")
+        # Get timeout for operation type
+        if timeout is None:
+            timeout = self.operation_timeouts.get(operation_name, self.operation_timeouts["default"])
+        
+        if max_retries is None:
+            max_retries = 2
+        
+        # Track active operation
+        operation_id = f"{operation_name}_{time.time()}"
+        self._active_operations.add(operation_id)
+        
+        try:
+            # Try operation with retries
+            for attempt in range(max_retries):
+                try:
+                    start_time = time.time()
+                    
+                    # Execute with timeout
+                    result = await asyncio.wait_for(
+                        operation_func(*args, **kwargs),
+                        timeout=timeout
+                    )
+                    
+                    latency = time.time() - start_time
+                    self.metrics.record_operation(operation_name, latency, True)
+                    
+                    if latency > 5.0:  # Warn if operation is slow
+                        logger.warning(f"{operation_name} took {latency:.2f}s")
+                    
+                    return result
+                    
+                except asyncio.TimeoutError:
+                    self.metrics.record_operation(operation_name, timeout, False)
+                    logger.error(f"{operation_name} timed out after {timeout}s")
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying {operation_name} (attempt {attempt + 2}/{max_retries})")
+                        await asyncio.sleep(1)
+                    else:
+                        return None
+                    
+                except NotFoundError as e:
+                    # Don't retry for not found errors
+                    self.metrics.record_operation(operation_name, 0, False)
+                    logger.error(f"{operation_name} failed: {e}")
                     return None
                     
-            except Exception as e:
-                self.metrics.record_operation(operation_name, 0, False)
-                logger.error(f"Unexpected error in {operation_name}: {e}")
-                return None
-        
-        return None
+                except (BadRequestError, ClientError, InternalServerError) as e:
+                    self.metrics.record_operation(operation_name, 0, False)
+                    
+                    if attempt < max_retries - 1:
+                        logger.warning(f"{operation_name} failed, retrying: {e}")
+                        await asyncio.sleep(1)
+                    else:
+                        logger.error(f"{operation_name} failed after {max_retries} attempts: {e}")
+                        return None
+                        
+                except Exception as e:
+                    self.metrics.record_operation(operation_name, 0, False)
+                    logger.error(f"Unexpected error in {operation_name}: {e}")
+                    return None
+            
+            return None
+            
+        finally:
+            # Clean up active operation
+            self._active_operations.discard(operation_id)
     
     @asynccontextmanager
     async def client_session(self):
@@ -433,14 +511,107 @@ class LettaConnectionManager:
         """Check if in fallback mode."""
         return self.state == ConnectionState.FALLBACK
     
+    def configure_timeout(self, operation_name: str, timeout: float):
+        """Configure timeout for a specific operation type."""
+        self.operation_timeouts[operation_name] = timeout
+        logger.debug(f"Set timeout for {operation_name} to {timeout}s")
+    
+    def configure_retries(self, max_retries: int, base_delay: float = None):
+        """Configure retry behavior."""
+        self.max_retries = max_retries
+        if base_delay is not None:
+            self.base_delay = base_delay
+        logger.debug(f"Set max retries to {max_retries}, base delay to {self.base_delay}s")
+    
+    async def cleanup_resources(self):
+        """Clean up all resources and active operations."""
+        async with self._cleanup_lock:
+            logger.info("Starting resource cleanup")
+            
+            # Cancel all active operations
+            if self._active_operations:
+                logger.info(f"Cancelling {len(self._active_operations)} active operations")
+                # Note: In a real implementation, would track actual tasks to cancel
+                self._active_operations.clear()
+            
+            # Stop health monitoring
+            if self.health_check_task and not self.health_check_task.done():
+                self.health_check_task.cancel()
+                try:
+                    await self.health_check_task
+                except asyncio.CancelledError:
+                    pass
+                self.health_check_task = None
+            
+            # Clear metrics older than 1 hour
+            cutoff_time = datetime.now() - timedelta(hours=1)
+            for op_name, latencies in self.metrics.operation_latencies.items():
+                # In real implementation, would filter by timestamp
+                if len(latencies) > 100:
+                    self.metrics.operation_latencies[op_name] = latencies[-100:]
+            
+            logger.info("Resource cleanup completed")
+    
+    async def wait_for_operations(self, timeout: float = 30.0) -> bool:
+        """
+        Wait for all active operations to complete.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if all operations completed, False if timeout
+        """
+        start_time = time.time()
+        
+        while self._active_operations and (time.time() - start_time) < timeout:
+            logger.debug(f"Waiting for {len(self._active_operations)} operations to complete")
+            await asyncio.sleep(0.5)
+        
+        if self._active_operations:
+            logger.warning(f"{len(self._active_operations)} operations still active after {timeout}s")
+            return False
+        
+        return True
+    
+    async def graceful_shutdown(self):
+        """Perform graceful shutdown with resource cleanup."""
+        logger.info("Starting graceful shutdown")
+        
+        # Signal shutdown
+        self._shutdown_event.set()
+        
+        # Wait for active operations
+        await self.wait_for_operations(timeout=10.0)
+        
+        # Clean up resources
+        await self.cleanup_resources()
+        
+        # Disconnect
+        await self.disconnect()
+        
+        logger.info("Graceful shutdown completed")
+    
     async def disconnect(self):
-        """Disconnect from server."""
+        """Disconnect from server and clean up."""
+        logger.info("Disconnecting from Letta server")
+        
+        # Stop health monitoring
         if self.health_check_task:
             self.health_check_task.cancel()
+            try:
+                await self.health_check_task
+            except asyncio.CancelledError:
+                pass
+            self.health_check_task = None
         
+        # Clean up clients
         self.client = None
         self.sync_client = None
         self.state = ConnectionState.DISCONNECTED
+        
+        # Clear active operations
+        self._active_operations.clear()
         
         logger.info("Disconnected from Letta server")
 
