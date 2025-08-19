@@ -22,7 +22,12 @@ logger = get_logger(__name__)
 class APIClient:
     """Async HTTP client for backend API."""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = None):
+        if base_url is None:
+            # Check if backend port was dynamically assigned
+            import os
+            port = os.environ.get('BACKEND_PORT', '8000')
+            base_url = f"http://localhost:{port}"
         self.base_url = base_url
         self.session: Optional[aiohttp.ClientSession] = None
     
@@ -38,6 +43,42 @@ class APIClient:
         """Close HTTP session."""
         if self.session and not self.session.closed:
             await self.session.close()
+    
+    async def post(self, endpoint: str, data: Dict[str, Any] = None, json_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Generic POST request method."""
+        session = await self._get_session()
+        try:
+            # Ensure endpoint doesn't start with double slash
+            endpoint = endpoint.lstrip('/')
+            url = f"{self.base_url}/{endpoint}"
+            
+            kwargs = {}
+            if json_data is not None:
+                kwargs['json'] = json_data
+            elif data is not None:
+                kwargs['data'] = data
+            
+            async with session.post(url, **kwargs) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error(f"POST request failed for {endpoint}", error=str(e))
+            raise
+    
+    async def get(self, endpoint: str) -> Dict[str, Any]:
+        """Generic GET request method."""
+        session = await self._get_session()
+        try:
+            # Ensure endpoint doesn't start with double slash
+            endpoint = endpoint.lstrip('/')
+            url = f"{self.base_url}/{endpoint}"
+            
+            async with session.get(url) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error(f"GET request failed for {endpoint}", error=str(e))
+            raise
     
     # Matter Management
     async def create_matter(self, name: str) -> Dict[str, Any]:
@@ -342,7 +383,7 @@ class APIClient:
             async with session.post(
                 f"{self.base_url}/api/settings/models",
                 json={
-                    "provider": provider,
+                    "provider_type": provider,  # Changed from 'provider' to 'provider_type'
                     "generation_model": generation_model,
                     "embedding_model": embedding_model,
                     "api_key": api_key

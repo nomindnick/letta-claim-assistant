@@ -97,7 +97,6 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
         field="request",
         value=str(exc),
         constraint="Request validation failed",
-        user_message="Invalid request data",
         suggestion="Please check your request format and try again"
     )
     
