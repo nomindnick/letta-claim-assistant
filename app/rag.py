@@ -449,7 +449,7 @@ class RAGEngine:
             followup_response = await self.llm_provider.generate(
                 system="You are a construction claims legal assistant. Generate specific, actionable follow-up questions.",
                 messages=followup_messages,
-                max_tokens=200,  # Keep it concise
+                max_tokens=None,  # Let model complete naturally
                 temperature=0.3   # Slightly more creative for varied suggestions
             )
             
@@ -505,7 +505,7 @@ class RAGEngine:
             extraction_response = await self.llm_provider.generate(
                 system="You extract structured knowledge from construction claims analysis. Return only valid JSON.",
                 messages=extraction_messages,
-                max_tokens=500,
+                max_tokens=None,  # Let model complete naturally
                 temperature=0.1  # Low temperature for structured output
             )
             

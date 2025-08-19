@@ -5,7 +5,7 @@ Integrates with local Ollama installation for both text generation
 and embedding creation using specified models.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import aiohttp
 import asyncio
 import json
@@ -29,7 +29,7 @@ class OllamaProvider(BaseLLMProvider):
         self,
         system: str,
         messages: List[Dict[str, str]],
-        max_tokens: int = 900,
+        max_tokens: Optional[int] = None,
         temperature: float = 0.2
     ) -> str:
         """
@@ -50,15 +50,12 @@ class OllamaProvider(BaseLLMProvider):
         # Format messages with system prompt
         formatted_messages = self._format_messages(system, messages)
         
-        # Build options dict
+        # Build options dict - removed num_predict to let model complete naturally
         options = {
             "temperature": temperature
         }
-        
-        # Only add num_predict if we want to limit tokens
-        # Note: gpt-oss model has issues with small num_predict values
-        if max_tokens and max_tokens > 100:  # Only set if reasonable limit
-            options["num_predict"] = max_tokens
+        # Note: We're not setting num_predict to avoid truncation issues with gpt-oss model
+        # The model will generate until it naturally completes
         
         payload = {
             "model": self.model_name,
@@ -185,8 +182,8 @@ class OllamaProvider(BaseLLMProvider):
                     ],
                     "stream": False,
                     "options": {
-                        "temperature": 0.1,
-                        "num_predict": 50  # Increased from 10 to avoid truncation
+                        "temperature": 0.1
+                        # No num_predict - let model complete naturally
                     }
                 }
                 
