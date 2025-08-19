@@ -50,15 +50,21 @@ class OllamaProvider(BaseLLMProvider):
         # Format messages with system prompt
         formatted_messages = self._format_messages(system, messages)
         
+        # Build options dict
+        options = {
+            "temperature": temperature
+        }
+        
+        # Only add num_predict if we want to limit tokens
+        # Note: gpt-oss model has issues with small num_predict values
+        if max_tokens and max_tokens > 100:  # Only set if reasonable limit
+            options["num_predict"] = max_tokens
+        
         payload = {
             "model": self.model_name,
             "messages": formatted_messages,
             "stream": False,  # For now, use non-streaming for simplicity
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens
-                # Removed stop tokens - let the model use its defaults
-            }
+            "options": options
         }
         
         try:
@@ -101,15 +107,29 @@ class OllamaProvider(BaseLLMProvider):
                     )
                     
                     # Extract response content
-                    if "message" in data and "content" in data["message"]:
-                        generated_text = data["message"]["content"]
+                    if "message" in data:
+                        message = data["message"]
+                        generated_text = message.get("content", "")
+                        
+                        # Handle gpt-oss model's quirk: sometimes content is in "thinking" field
+                        # when the response is cut off due to num_predict limit
+                        if not generated_text and "thinking" in message:
+                            thinking = message.get("thinking", "")
+                            logger.warning(
+                                "gpt-oss model returned content in 'thinking' field",
+                                model=self.model_name,
+                                thinking_preview=thinking[:200]
+                            )
+                            # For now, don't use thinking as the response
+                            # This usually indicates the response was truncated
                         
                         logger.debug(
                             "Generation completed",
                             model=self.model_name,
                             response_length=len(generated_text),
                             prompt_eval_count=data.get("prompt_eval_count", 0),
-                            eval_count=data.get("eval_count", 0)
+                            eval_count=data.get("eval_count", 0),
+                            done_reason=data.get("done_reason", "unknown")
                         )
                         
                         # Check for empty response
@@ -119,7 +139,8 @@ class OllamaProvider(BaseLLMProvider):
                                 model=self.model_name,
                                 full_response=data,
                                 prompt_eval_count=data.get("prompt_eval_count", 0),
-                                eval_count=data.get("eval_count", 0)
+                                eval_count=data.get("eval_count", 0),
+                                done_reason=data.get("done_reason", "unknown")
                             )
                             raise RuntimeError("LLM generated empty response")
                         
@@ -165,7 +186,7 @@ class OllamaProvider(BaseLLMProvider):
                     "stream": False,
                     "options": {
                         "temperature": 0.1,
-                        "num_predict": 10
+                        "num_predict": 50  # Increased from 10 to avoid truncation
                     }
                 }
                 
