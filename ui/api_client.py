@@ -44,8 +44,8 @@ class APIClient:
         if self.session and not self.session.closed:
             await self.session.close()
     
-    async def post(self, endpoint: str, data: Dict[str, Any] = None, json_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Generic POST request method."""
+    async def post(self, endpoint: str, json_data: Dict[str, Any] = None, data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Generic POST request method. By default sends JSON data."""
         session = await self._get_session()
         try:
             # Ensure endpoint doesn't start with double slash
@@ -56,7 +56,8 @@ class APIClient:
             if json_data is not None:
                 kwargs['json'] = json_data
             elif data is not None:
-                kwargs['data'] = data
+                # If data is a dict and not explicitly form data, send as JSON
+                kwargs['json'] = data
             
             async with session.post(url, **kwargs) as response:
                 response.raise_for_status()
