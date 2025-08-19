@@ -179,7 +179,7 @@ class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, description="User query")
     k: int = Field(default=8, ge=1, le=20, description="Number of chunks to retrieve")
     model: Optional[str] = Field(None, description="Model to use (defaults to active)")
-    max_tokens: int = Field(default=900, ge=100, le=4000, description="Maximum tokens in response")
+    max_tokens: Optional[int] = Field(None, ge=100, le=4000, description="Maximum tokens in response (None for no limit)")
 
 
 class CitationMetrics(BaseModel):

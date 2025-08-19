@@ -338,20 +338,25 @@ class APIClient:
         query: str,
         k: int = 8,
         model: Optional[str] = None,
-        max_tokens: int = 900
+        max_tokens: Optional[int] = None
     ) -> Dict[str, Any]:
         """Send chat message and get RAG response."""
         session = await self._get_session()
         try:
+            # Build request payload
+            payload = {
+                "matter_id": matter_id,
+                "query": query,
+                "k": k
+            }
+            if model is not None:
+                payload["model"] = model
+            if max_tokens is not None:
+                payload["max_tokens"] = max_tokens
+                
             async with session.post(
                 f"{self.base_url}/api/chat",
-                json={
-                    "matter_id": matter_id,
-                    "query": query,
-                    "k": k,
-                    "model": model,
-                    "max_tokens": max_tokens
-                }
+                json=payload
             ) as response:
                 response.raise_for_status()
                 return await response.json()
