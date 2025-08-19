@@ -184,6 +184,8 @@ class ValidationError(BaseApplicationError):
         kwargs.setdefault('severity', ErrorSeverity.WARNING)
         kwargs.setdefault('recovery_strategy', RecoveryStrategy.MANUAL)
         kwargs.setdefault('error_code', 'VALIDATION_ERROR')
+        # Remove user_message from kwargs if it exists to avoid duplicate
+        kwargs.pop('user_message', None)
         super().__init__(
             message=message,
             user_message=user_message,
@@ -202,6 +204,8 @@ class ServiceUnavailableError(BaseApplicationError):
         kwargs.setdefault('severity', ErrorSeverity.WARNING)
         kwargs.setdefault('recovery_strategy', RecoveryStrategy.FALLBACK)
         kwargs.setdefault('error_code', f'SERVICE_{service.upper()}_UNAVAILABLE')
+        # Remove user_message from kwargs if it exists to avoid duplicate
+        kwargs.pop('user_message', None)
         super().__init__(
             message=message,
             user_message=user_message,
@@ -221,6 +225,8 @@ class ConfigurationError(BaseApplicationError):
         kwargs.setdefault('severity', ErrorSeverity.ERROR)
         kwargs.setdefault('recovery_strategy', RecoveryStrategy.MANUAL)
         kwargs.setdefault('error_code', f'CONFIG_{component.upper()}')
+        # Remove user_message from kwargs if it exists to avoid duplicate
+        kwargs.pop('user_message', None)
         super().__init__(
             message=message,
             user_message=user_message,
@@ -249,6 +255,9 @@ class FileProcessingError(BaseApplicationError):
         kwargs.setdefault('recovery_strategy', RecoveryStrategy.RETRY)
         kwargs.setdefault('error_code', f'FILE_{operation.upper()}')
         
+        # Remove user_message from kwargs if it exists to avoid duplicate
+        kwargs.pop('user_message', None)
+        
         super().__init__(
             message=message,
             user_message=user_message,
@@ -267,6 +276,8 @@ class StartupError(BaseApplicationError):
         kwargs.setdefault('severity', ErrorSeverity.ERROR)
         kwargs.setdefault('recovery_strategy', RecoveryStrategy.MANUAL)
         kwargs.setdefault('error_code', f'STARTUP_{check_name.upper()}')
+        # Remove user_message from kwargs if it exists to avoid duplicate
+        kwargs.pop('user_message', None)
         super().__init__(
             message=message,
             user_message=user_message,

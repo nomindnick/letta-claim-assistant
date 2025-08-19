@@ -1167,8 +1167,24 @@ class LettaClaimUI:
                     if status['status'] == 'completed':
                         ui.notify(f"✓ Document processed: {job_info['filename']}", type="positive")
                     else:
+                        # Get user-friendly error message
                         error_detail = status.get('error', 'Unknown error')
-                        ui.notify(f"✗ Processing failed: {job_info['filename']} - {error_detail}", type="negative")
+                        if 'OCR processing failed' in error_detail or 'Failed to execute OCR' in error_detail:
+                            user_message = "Document processing failed. Please try uploading again."
+                        elif 'memory' in error_detail.lower():
+                            user_message = "Insufficient memory to process document. Try a smaller file."
+                        elif 'timeout' in error_detail.lower():
+                            user_message = "Processing timed out. The document may be too large."
+                        else:
+                            # Extract just the first sentence or up to first colon for cleaner message
+                            user_message = error_detail.split(':')[0].split('.')[0]
+                            if len(user_message) > 100:
+                                user_message = "Document processing failed"
+                        
+                        ui.notify(f"✗ {job_info['filename']}: {user_message}", type="negative")
+                        logger.error("Document processing failed", 
+                                   filename=job_info['filename'], 
+                                   error=error_detail)
                 
             except Exception as e:
                 logger.error("Failed to get job status", job_id=job_info['job_id'], error=str(e))
