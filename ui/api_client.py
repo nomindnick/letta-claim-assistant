@@ -449,6 +449,21 @@ class APIClient:
             logger.error("Failed to clear chat history", error=str(e))
             raise
     
+    # Memory Management
+    async def get_memory_summary(self, matter_id: str, max_length: int = 500) -> Dict[str, Any]:
+        """Get memory summary for a matter."""
+        session = await self._get_session()
+        try:
+            async with session.post(
+                f"{self.base_url}/api/matters/{matter_id}/memory/summary",
+                params={"max_length": max_length}
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to get memory summary", error=str(e))
+            raise
+    
     # Health Check
     async def health_check(self) -> bool:
         """Check if backend API is healthy."""

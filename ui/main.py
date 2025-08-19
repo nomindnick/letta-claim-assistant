@@ -70,7 +70,7 @@ class LettaClaimUI:
         
         # Memory components
         self.memory_badge = MemoryStatusBadge()
-        self.memory_dashboard = MemoryStatsDashboard()
+        self.memory_dashboard = MemoryStatsDashboard(api_client=self.api_client)
         self.agent_health = AgentHealthIndicator()
         self.memory_stats_timer = None
         
@@ -1388,12 +1388,17 @@ class LettaClaimUI:
         if not self.current_matter:
             # Show disconnected state when no matter is selected
             if self.memory_dashboard:
+                self.memory_dashboard.set_matter_id(None)
                 await self.memory_dashboard.update_stats({
                     'memory_items': 0,
                     'connection_state': 'disconnected',
                     'last_sync': None
                 })
             return
+        
+        # Set the current matter ID for the dashboard
+        if self.memory_dashboard:
+            self.memory_dashboard.set_matter_id(self.current_matter['id'])
         
         try:
             # Get memory stats from API

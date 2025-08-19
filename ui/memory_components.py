@@ -70,11 +70,13 @@ class MemoryStatusBadge:
 class MemoryStatsDashboard:
     """Dashboard component for memory statistics."""
     
-    def __init__(self):
+    def __init__(self, api_client=None):
         self.dashboard_container = None
         self.stats_elements = {}
         self.auto_refresh_timer = None
         self.refresh_callback = None  # Callback to trigger refresh from parent
+        self.api_client = api_client
+        self.current_matter_id = None
         
     def create(self) -> ui.element:
         """Create the memory statistics dashboard."""
@@ -122,6 +124,10 @@ class MemoryStatsDashboard:
         
         self.dashboard_container = container
         return container
+    
+    def set_matter_id(self, matter_id: str):
+        """Set the current matter ID for API calls."""
+        self.current_matter_id = matter_id
     
     async def update_stats(self, stats: Dict[str, Any]):
         """Update the dashboard with new stats."""
@@ -199,8 +205,94 @@ class MemoryStatsDashboard:
     
     async def _show_memory_summary(self):
         """Show memory summary dialog."""
-        # This will be implemented to show a dialog with memory summary
-        ui.notify("Memory summary feature coming soon!", type="info")
+        if not self.api_client or not self.current_matter_id:
+            ui.notify("No matter selected or API client not available", type="warning")
+            return
+        
+        # Create loading dialog
+        with ui.dialog() as dialog, ui.card().classes('w-96 max-w-full'):
+            dialog.open()
+            
+            ui.label('Memory Summary').classes('text-lg font-bold mb-4')
+            
+            # Loading state
+            loading_container = ui.column().classes('w-full items-center py-8')
+            with loading_container:
+                ui.spinner(size='lg', color='purple')
+                ui.label('Loading memory summary...').classes('mt-4 text-gray-600')
+            
+            close_button = ui.button('Close', on_click=dialog.close).classes('w-full mt-4')
+            close_button.visible = False
+            
+            # Fetch memory summary
+            try:
+                result = await self.api_client.get_memory_summary(
+                    self.current_matter_id,
+                    max_length=1000
+                )
+                
+                # Clear loading state
+                loading_container.clear()
+                
+                # Display summary
+                with loading_container:
+                    # Parse the summary text
+                    summary_text = result.get('summary', 'No memory items found')
+                    
+                    # Create scrollable container for the summary
+                    with ui.scroll_area().classes('w-full h-96 p-4 bg-gray-50 rounded'):
+                        # Split summary into lines and format
+                        lines = summary_text.split('\n')
+                        
+                        for line in lines:
+                            if line.startswith('Memory contains'):
+                                # Main header
+                                ui.label(line).classes('font-semibold text-base mb-3 text-purple-700')
+                            elif line.startswith('- '):
+                                # Category headers
+                                category_line = line[2:]  # Remove "- "
+                                if ':' in category_line:
+                                    category, count = category_line.split(':', 1)
+                                    with ui.row().classes('items-center gap-2 mb-2'):
+                                        # Icon based on category
+                                        icon_map = {
+                                            'Entity': 'person',
+                                            'Event': 'event',
+                                            'Issue': 'warning',
+                                            'Fact': 'fact_check',
+                                            'interaction': 'chat'
+                                        }
+                                        icon = icon_map.get(category, 'category')
+                                        ui.icon(icon).classes('text-purple-600')
+                                        ui.label(f"{category}:").classes('font-medium')
+                                        ui.label(count.strip()).classes('text-gray-600')
+                                else:
+                                    ui.label(line).classes('ml-4 text-sm')
+                            elif line.startswith('  Examples:'):
+                                # Examples line
+                                ui.label(line).classes('ml-8 text-xs text-gray-500 italic mb-2')
+                            elif line.strip():
+                                # Other content
+                                ui.label(line).classes('text-sm text-gray-700')
+                    
+                    # Add matter info
+                    ui.separator().classes('my-4')
+                    with ui.row().classes('w-full justify-between items-center text-xs text-gray-500'):
+                        ui.label(f"Matter: {result.get('matter_name', 'Unknown')}")
+                        ui.label(f"ID: {result.get('matter_id', '')}")
+                
+                close_button.visible = True
+                
+            except Exception as e:
+                # Clear loading state and show error
+                loading_container.clear()
+                with loading_container:
+                    ui.icon('error').classes('text-4xl text-red-500 mb-4')
+                    ui.label('Failed to load memory summary').classes('font-medium text-red-700')
+                    ui.label(str(e)).classes('text-sm text-gray-600 mt-2')
+                
+                close_button.visible = True
+                ui.notify(f"Failed to load memory summary: {str(e)}", type="negative")
     
     def start_auto_refresh(self, interval: float = 30.0):
         """Start auto-refresh timer."""
