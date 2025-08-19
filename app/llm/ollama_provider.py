@@ -56,8 +56,8 @@ class OllamaProvider(BaseLLMProvider):
             "stream": False,  # For now, use non-streaming for simplicity
             "options": {
                 "temperature": temperature,
-                "num_predict": max_tokens,
-                "stop": ["<|end|>", "<|im_end|>"]  # Common stop tokens
+                "num_predict": max_tokens
+                # Removed stop tokens - let the model use its defaults
             }
         }
         
@@ -68,7 +68,8 @@ class OllamaProvider(BaseLLMProvider):
                     model=self.model_name,
                     message_count=len(formatted_messages),
                     max_tokens=max_tokens,
-                    temperature=temperature
+                    temperature=temperature,
+                    messages_preview=[{"role": m["role"], "content_length": len(m["content"])} for m in formatted_messages]
                 )
                 
                 async with session.post(
@@ -88,6 +89,17 @@ class OllamaProvider(BaseLLMProvider):
                     
                     data = await response.json()
                     
+                    # Log the full response for debugging
+                    logger.debug(
+                        "Ollama raw response",
+                        model=self.model_name,
+                        response_keys=list(data.keys()),
+                        has_message="message" in data,
+                        message_content_length=len(data.get("message", {}).get("content", "")) if "message" in data else 0,
+                        done=data.get("done"),
+                        total_duration_ms=data.get("total_duration", 0) / 1_000_000 if data.get("total_duration") else 0
+                    )
+                    
                     # Extract response content
                     if "message" in data and "content" in data["message"]:
                         generated_text = data["message"]["content"]
@@ -102,7 +114,13 @@ class OllamaProvider(BaseLLMProvider):
                         
                         # Check for empty response
                         if not generated_text or not generated_text.strip():
-                            logger.error("LLM generated empty response", model=self.model_name)
+                            logger.error(
+                                "LLM generated empty response",
+                                model=self.model_name,
+                                full_response=data,
+                                prompt_eval_count=data.get("prompt_eval_count", 0),
+                                eval_count=data.get("eval_count", 0)
+                            )
                             raise RuntimeError("LLM generated empty response")
                         
                         return generated_text.strip()
@@ -121,13 +139,60 @@ class OllamaProvider(BaseLLMProvider):
         """Test connection to Ollama server."""
         try:
             async with aiohttp.ClientSession() as session:
+                # First check if server is running and model exists
                 async with session.get(f"{self.base_url}/api/tags", timeout=5) as response:
+                    if response.status != 200:
+                        return False
+                    
+                    data = await response.json()
+                    # Check if our model is available
+                    models = [model["name"] for model in data.get("models", [])]
+                    if self.model_name not in models:
+                        logger.warning(
+                            "Model not found in Ollama",
+                            model=self.model_name,
+                            available_models=models
+                        )
+                        return False
+                
+                # Try a simple generation test
+                test_payload = {
+                    "model": self.model_name,
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": "Reply with 'OK' if you are working."}
+                    ],
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "num_predict": 10
+                    }
+                }
+                
+                async with session.post(
+                    self.chat_url,
+                    json=test_payload,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        # Check if our model is available
-                        models = [model["name"] for model in data.get("models", [])]
-                        return self.model_name in models
-                    return False
+                        content = data.get("message", {}).get("content", "")
+                        logger.debug(
+                            "Ollama test generation result",
+                            model=self.model_name,
+                            response_length=len(content),
+                            content_preview=content[:100] if content else "(empty)"
+                        )
+                        return bool(content and content.strip())
+                    else:
+                        error_text = await response.text()
+                        logger.error(
+                            "Ollama test generation failed",
+                            status=response.status,
+                            error=error_text
+                        )
+                        return False
+                        
         except Exception as e:
             logger.error("Ollama connection test failed", error=str(e))
             return False
