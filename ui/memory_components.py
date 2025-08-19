@@ -74,6 +74,7 @@ class MemoryStatsDashboard:
         self.dashboard_container = None
         self.stats_elements = {}
         self.auto_refresh_timer = None
+        self.refresh_callback = None  # Callback to trigger refresh from parent
         
     def create(self) -> ui.element:
         """Create the memory statistics dashboard."""
@@ -137,7 +138,7 @@ class MemoryStatsDashboard:
         if 'connection_icon' in self.stats_elements and 'connection_text' in self.stats_elements:
             if connection_state == 'connected':
                 self.stats_elements['connection_icon'].classes(
-                    remove='text-gray-400 text-yellow-500 text-red-500',
+                    remove='text-gray-400 text-yellow-500 text-red-500 animate-pulse',
                     add='text-green-500'
                 )
                 self.stats_elements['connection_text'].text = 'Connected'
@@ -149,7 +150,7 @@ class MemoryStatsDashboard:
                 self.stats_elements['connection_text'].text = 'Connecting...'
             else:
                 self.stats_elements['connection_icon'].classes(
-                    remove='text-green-500 text-yellow-500',
+                    remove='text-green-500 text-yellow-500 animate-pulse',
                     add='text-red-500'
                 )
                 self.stats_elements['connection_text'].text = 'Disconnected'
@@ -188,9 +189,11 @@ class MemoryStatsDashboard:
             # Show loading state
             self.refresh_button.props('loading')
             
-            # Trigger refresh through parent component
-            # This will be connected by the main UI
-            await asyncio.sleep(0.5)  # Placeholder
+            # Trigger refresh through parent component callback
+            if self.refresh_callback:
+                await self.refresh_callback()
+            else:
+                await asyncio.sleep(0.5)  # Fallback placeholder
             
             self.refresh_button.props(remove='loading')
     

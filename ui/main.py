@@ -105,7 +105,7 @@ class LettaClaimUI:
             self.loading_spinner.hide()
             
             # Create main layout with animations
-            with ui.row().classes('w-full h-screen animate-fade-in'):
+            with ui.row().classes('w-full h-screen animate-fade-in flex'):
                 # Left pane: Matter & Documents
                 await self._create_left_pane()
                 
@@ -118,8 +118,23 @@ class LettaClaimUI:
             # Settings drawer
             await self._create_settings_drawer()
             
-            # Initialize chat display
+            # Initialize chat display and load history if we have a current matter
+            if self.current_matter:
+                await self._load_chat_history()
+                # Enable UI components for the pre-selected matter
+                if self.upload_widget:
+                    self.upload_widget.props(remove='disable')
+                if self.chat_input:
+                    self.chat_input.props(remove='disable')
+                if self.send_button:
+                    self.send_button.props('disable')  # Keep disabled until text entered
+                # Refresh document list for the pre-selected matter
+                await self._refresh_document_list()
             await self._update_chat_display()
+            
+            # Load initial memory stats and agent health after UI is created
+            await self._refresh_memory_stats()
+            await self._update_agent_health()
             
             # Start background job polling
             ui.timer(2.0, self._poll_job_status)
@@ -133,9 +148,9 @@ class LettaClaimUI:
             # Initialize consent checking for any existing external providers
             await self._check_provider_consent_status()
             
-            # Initial memory stats load
-            await self._refresh_memory_stats()
-            await self._update_agent_health()
+            # Initial memory stats load - moved after UI creation
+            # await self._refresh_memory_stats()
+            # await self._update_agent_health()
             
             # Show welcome notification
             self.notification_manager.success("Application loaded successfully!")
@@ -231,7 +246,7 @@ class LettaClaimUI:
     
     async def _create_left_pane(self):
         """Create the left pane with matter management and documents."""
-        with ui.column().classes('w-1/4 h-full border-r bg-gray-50 p-4'):
+        with ui.column().classes('w-1/4 h-full border-r bg-gray-50 p-4 overflow-y-auto flex-shrink-0'):
             ui.label('Matter & Documents').classes('text-lg font-bold mb-4')
             
             # Matter management
@@ -269,22 +284,39 @@ class LettaClaimUI:
                     on_rejected=self._handle_upload_rejected
                 ).props('accept=".pdf"').classes('w-full mb-2')
                 
+                # Enable/disable based on whether a matter is selected
                 if not self.current_matter:
                     self.upload_widget.props('disable')
                     ui.label('Select a Matter to upload documents').classes('text-xs text-gray-500')
+                else:
+                    # Ensure upload widget is enabled if matter is selected
+                    self.upload_widget.props(remove='disable')
             
             # Memory Statistics Dashboard
+            self.memory_dashboard.refresh_callback = self._refresh_memory_stats
             self.memory_dashboard.create()
             
+            # Initialize memory dashboard with current state
+            if self.current_matter:
+                # Will be refreshed after UI creation completes
+                pass
+            else:
+                # Show disconnected state initially if no matter
+                asyncio.create_task(self.memory_dashboard.update_stats({
+                    'memory_items': 0,
+                    'connection_state': 'disconnected',
+                    'last_sync': None
+                }))
+            
             # Document list
-            with ui.card().classes('w-full flex-1 mt-4'):
+            with ui.card().classes('w-full mt-4'):
                 ui.label('Document Status').classes('font-semibold mb-2')
-                self.document_list = ui.column().classes('w-full')
+                self.document_list = ui.column().classes('w-full max-h-80 overflow-y-auto')
                 await self._refresh_document_list()
     
     async def _create_center_pane(self):
         """Create the center pane with chat interface."""
-        with ui.column().classes('w-1/2 h-full p-4'):
+        with ui.column().classes('w-1/2 h-full p-4 flex-grow'):
             # Header with settings button and agent health
             with ui.row().classes('w-full justify-between items-center mb-4'):
                 with ui.row().classes('items-center gap-3'):
@@ -318,25 +350,27 @@ class LettaClaimUI:
                     icon='send'
                 ).classes('ml-2')
                 
-                # Disable if no matter selected
+                # Enable/disable based on whether a matter is selected
                 if not self.current_matter:
                     self.chat_input.props('disable')
                     self.send_button.props('disable')
                 else:
+                    # Enable chat input if matter is selected
+                    self.chat_input.props(remove='disable')
                     self.send_button.props('disable')  # Enabled when text entered
     
     async def _create_right_pane(self):
         """Create the right pane with sources display."""
-        with ui.column().classes('w-1/4 h-full border-l bg-gray-50 p-4'):
+        with ui.column().classes('w-1/4 h-full border-l bg-gray-50 p-4 flex-shrink-0'):
             ui.label('Sources').classes('text-lg font-bold mb-4')
             
             with ui.card().classes('w-full flex-1'):
-                self.sources_panel = ui.column().classes('w-full h-full overflow-y-auto')
-                
-                # Placeholder content
-                ui.label('Sources will appear here after asking questions').classes(
-                    'text-gray-500 text-center py-4'
-                )
+                self.sources_panel = ui.column().classes('w-full h-full overflow-y-auto p-2')
+                # Add initial placeholder
+                with self.sources_panel:
+                    ui.label('Sources will appear here after asking questions').classes(
+                        'text-gray-500 text-center py-4'
+                    )
     
     async def _create_settings_drawer(self):
         """Create the settings drawer."""
@@ -702,14 +736,24 @@ class LettaClaimUI:
                     self.current_matter = matter
                     break
             
-            # Enable upload and chat
-            self.upload_widget.props('enable')
-            if self.chat_input:
-                self.chat_input.props('enable')
+            # Enable upload widget by removing disable prop
+            if self.upload_widget:
+                self.upload_widget.props(remove='disable')
             
-            # Refresh UI
+            # Enable chat input and send button
+            if self.chat_input:
+                self.chat_input.props(remove='disable')
+            if self.send_button:
+                self.send_button.props('disable')  # Keep send button disabled until text entered
+            
+            # Refresh UI components
             await self._refresh_document_list()
             await self._load_chat_history()
+            await self._update_chat_display()  # Ensure chat display is updated
+            
+            # Refresh memory stats and agent health for the new matter
+            await self._refresh_memory_stats()
+            await self._update_agent_health()
             
             ui.notify(f"Switched to Matter: {self.current_matter['name']}", type="positive")
             
@@ -1338,15 +1382,21 @@ class LettaClaimUI:
         except Exception as e:
             logger.error("Failed to refresh provider settings", error=str(e))
     
-    @response_cache.cached
     @measure_performance
     async def _refresh_memory_stats(self):
-        """Refresh memory statistics for current matter with caching."""
+        """Refresh memory statistics for current matter."""
         if not self.current_matter:
+            # Show disconnected state when no matter is selected
+            if self.memory_dashboard:
+                await self.memory_dashboard.update_stats({
+                    'memory_items': 0,
+                    'connection_state': 'disconnected',
+                    'last_sync': None
+                })
             return
         
         try:
-            # Get memory stats from API (cached)
+            # Get memory stats from API
             stats = await self.api_client.get(f"api/matters/{self.current_matter['id']}/memory/stats")
             
             # Update dashboard
@@ -1357,17 +1407,25 @@ class LettaClaimUI:
             
         except Exception as e:
             logger.error("Failed to refresh memory stats", error=str(e))
-            ErrorMessageHandler.show_error(
-                'memory_unavailable',
-                additional_info=str(e)
-            )
+            # Show error state in dashboard
+            if self.memory_dashboard:
+                await self.memory_dashboard.update_stats({
+                    'memory_items': 0,
+                    'connection_state': 'disconnected',
+                    'last_sync': None
+                })
+            # Only show error notification if it's not a routine connection issue
+            if 'connection refused' not in str(e).lower() and 'letta server' not in str(e).lower():
+                ErrorMessageHandler.show_error(
+                    'memory_unavailable',
+                    additional_info=str(e)
+                )
     
-    @response_cache.cached
     @measure_performance
     async def _update_agent_health(self):
-        """Update agent health indicator with caching."""
+        """Update agent health indicator."""
         try:
-            # Get health status from API (cached)
+            # Get health status from API
             health = await self.api_client.get("api/letta/health")
             
             # Update health indicator
