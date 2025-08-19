@@ -343,7 +343,17 @@ class OCRProcessor:
                 if remaining_stderr:
                     stderr_lines.append(remaining_stderr.decode('utf-8', errors='ignore'))
                 
-                error = self._parse_ocr_error('\n'.join(stderr_lines), Path(cmd[-2]))  # Input file path
+                stderr_text = '\n'.join(stderr_lines)
+                
+                # Log the actual error for debugging
+                logger.error(
+                    "OCR process failed",
+                    return_code=return_code,
+                    stderr_output=stderr_text[:1000],  # First 1000 chars
+                    file_path=str(cmd[-2])
+                )
+                
+                error = self._parse_ocr_error(stderr_text, Path(cmd[-2]))  # Input file path
                 handle_error(error, create_context(
                     operation="OCR processing", 
                     file_path=cmd[-2]
@@ -448,7 +458,11 @@ class OCRProcessor:
                 recovery_strategy=RecoveryStrategy.MANUAL
             )
         
-        if "timeout" in stderr_output.lower():
+        # Check for actual timeout error (not just the word "timeout" in command line args)
+        if ("timeout" in stderr_output.lower() and 
+            ("timed out" in stderr_output.lower() or 
+             "time limit" in stderr_output.lower() or
+             "maximum time" in stderr_output.lower())):
             return FileProcessingError(
                 file_path=file_path,
                 operation="OCR processing",

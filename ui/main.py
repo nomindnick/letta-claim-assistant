@@ -493,14 +493,25 @@ class LettaClaimUI:
             )
             
             if result.get('success', False):
-                ui.notify("Settings saved successfully", type="positive")
+                try:
+                    ui.notify("Settings saved successfully", type="positive")
+                except RuntimeError:
+                    # Client may have disconnected - just log it
+                    logger.info("Settings saved but client disconnected")
             else:
                 error_msg = result.get('error', 'Unknown error')
-                ui.notify(f"Failed to save settings: {error_msg}", type="negative")
+                try:
+                    ui.notify(f"Failed to save settings: {error_msg}", type="negative")
+                except RuntimeError:
+                    logger.error("Failed to save settings and client disconnected", error=error_msg)
                 
         except Exception as e:
             logger.error("Failed to save settings", error=str(e))
-            ui.notify(f"Failed to save settings: {str(e)}", type="negative")
+            try:
+                ui.notify(f"Failed to save settings: {str(e)}", type="negative")
+            except RuntimeError:
+                # Client disconnected - just log the error
+                pass
     
     async def _refresh_document_list(self):
         """Refresh the document list display."""
@@ -755,6 +766,14 @@ class LettaClaimUI:
             logger.error("Failed to create matter", error=str(e))
             ui.notify(f"Failed to create matter: {str(e)}", type="negative")
     
+    def _safe_notify(self, message: str, type: str = "info"):
+        """Safely notify user, handling disconnected clients."""
+        try:
+            ui.notify(message, type=type)
+        except RuntimeError:
+            # Client disconnected - just log it
+            logger.debug(f"Notification failed (client disconnected): {message}")
+    
     async def _handle_file_upload(self, e):
         """Handle PDF file upload."""
         if not self.current_matter:
@@ -793,11 +812,11 @@ class LettaClaimUI:
             # Refresh document list
             await self._refresh_document_list()
             
-            ui.notify(f"Uploaded {e.name} for processing", type="positive")
+            self._safe_notify(f"Uploaded {e.name} for processing", type="positive")
             
         except Exception as e:
             logger.error("Failed to upload files", error=str(e))
-            ui.notify(f"Failed to upload files: {str(e)}", type="negative")
+            self._safe_notify(f"Failed to upload files: {str(e)}", type="negative")
     
     async def _handle_upload_rejected(self, e):
         """Handle rejected file uploads."""
