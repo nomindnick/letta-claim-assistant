@@ -266,11 +266,14 @@ class OCRProcessor:
             cmd.extend(["--skip-text"])
             logger.debug("Using skip-text mode")
         
-        # Add timeout
-        cmd.extend(["--timeout", str(self.timeout_seconds)])
+        # Add timeout - use tesseract-timeout for OCR timeout
+        cmd.extend(["--tesseract-timeout", str(self.timeout_seconds)])
         
         # Input and output files
         cmd.extend([str(input_path), str(output_path)])
+        
+        # Log the command for debugging
+        logger.debug("OCR command", command=' '.join(cmd))
         
         return cmd
     
