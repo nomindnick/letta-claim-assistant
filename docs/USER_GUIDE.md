@@ -54,11 +54,38 @@ A **Matter** represents a single construction claim or case. Each matter has:
 
 ### AI Memory and Learning
 
-The application uses **Letta** for persistent AI memory:
-- **Entity Recognition**: Parties, people, organizations, projects
-- **Event Tracking**: Delays, RFIs, change orders, inspections
-- **Issue Identification**: Differing site conditions, design defects, delays
-- **Fact Accumulation**: Key facts and relationships build over time
+The application uses **Letta** for persistent AI memory that makes your assistant smarter about your specific case over time:
+
+#### How Memory Works
+- **Entity Recognition**: Automatically identifies parties, people, organizations, projects, amounts, and dates
+- **Event Tracking**: Records delays, RFIs, change orders, inspections, and other key events
+- **Issue Identification**: Recognizes differing site conditions, design defects, delays, and claims
+- **Fact Accumulation**: Key facts and relationships build over time across all interactions
+- **Cross-Reference Memory**: Connects information between documents and conversations
+
+#### Visual Memory Indicators
+- **Purple Badge**: "Memory Enhanced" appears on responses using stored knowledge
+- **Memory Dashboard**: Right panel shows memory item count, connection status, and last sync
+- **Agent Health**: Header shows agent status (green = healthy, yellow = issues, red = error)
+- **Memory Tooltips**: Hover over enhanced messages to see which memories were used
+- **Operation Toasts**: Notifications show when storing or recalling from memory
+
+#### California Construction Specialization
+The agent has specialized knowledge for California public works construction:
+- **Statutory Recognition**: Identifies California Public Contract Code, Government Code references
+- **Agency Awareness**: Recognizes Caltrans, DGS, DSA, counties, school districts, and their requirements
+- **Deadline Tracking**: Calculates statutory deadlines with day counts and consequences
+- **Compliance Validation**: Checks prevailing wage, DIR compliance, government claim requirements
+- **Expert Triggers**: Suggests when specialized analysis (quantum, delay, legal) may be needed
+
+#### Memory Quality and Management
+- **Importance Scoring**: More critical information prioritized for recall
+- **Deduplication**: Prevents storing duplicate or redundant information
+- **Recency Weighting**: Recent conversations weighted more heavily in context
+- **Automatic Pruning**: Old or low-importance items can be automatically removed
+- **Export/Import**: Memory can be backed up, exported, or transferred between systems
+
+*For detailed memory feature documentation, see the [Letta User Guide](LETTA_USER_GUIDE.md).*
 
 ### Local-First Privacy
 
@@ -224,10 +251,35 @@ After each answer, the AI suggests relevant follow-up questions:
 
 ### Memory and Context
 
-The AI remembers information across your session:
-- **Facts accumulate**: Established facts inform future answers
-- **Context builds**: Relationships between events become clearer
-- **Memory persists**: Information remains between application sessions
+The AI's Letta-powered memory system provides sophisticated context management:
+
+#### How Memory Enhances Responses
+- **Facts accumulate**: Established facts from documents and conversations inform future answers
+- **Context builds**: Relationships between events, parties, and issues become clearer over time
+- **Memory persists**: Information remains between application sessions and survives restarts
+- **Pattern Recognition**: Agent identifies contradictions, gaps, and patterns across documents
+- **Proactive Suggestions**: Follow-up questions generated based on stored knowledge
+
+#### Memory-Enhanced Chat Experience
+- **Purple Glow**: Messages with purple outline used agent memory for enhanced context
+- **Memory Badge**: Green "Memory Enhanced" badge appears on contextually-aware responses
+- **Contextual Follow-ups**: Suggested questions reference previous conversations and stored facts
+- **Cross-Reference Answers**: Agent connects current questions to related previous discussions
+
+#### Understanding Memory Operations
+- **Storing Notifications**: "Storing to memory..." appears when saving new information
+- **Recalling Notifications**: "Recalling from memory..." shows when retrieving context
+- **Memory Dashboard**: Right panel displays memory statistics and connection status
+- **Auto-Refresh**: Memory dashboard updates every 30 seconds to show current status
+
+#### Leveraging Memory Effectively
+- **Build on Previous Work**: Reference earlier conversations: "What did we determine about the delay claim?"
+- **Ask for Patterns**: "What contradictions have you identified across documents?"
+- **Request Comparisons**: "How does this payment dispute relate to the contract amendment?"
+- **Seek Timeline Analysis**: "What events led up to the stop work order?"
+- **Validate Understanding**: Agent will use stored knowledge to confirm or clarify facts
+
+*For comprehensive memory usage guidance, see the [Letta User Guide](LETTA_USER_GUIDE.md).*
 
 ## Understanding Sources and Citations
 
@@ -361,11 +413,35 @@ The application tracks response quality:
 
 ### Memory Insights
 
-View the AI's accumulated knowledge:
-- **Entities**: Parties, people, organizations identified
-- **Events**: Timeline of significant occurrences
-- **Issues**: Problems and claims identified
-- **Facts**: Key information extracted and verified
+The Letta memory system provides comprehensive insights into your agent's accumulated knowledge:
+
+#### Memory Statistics Dashboard
+- **Memory Items Count**: Total facts, entities, events, and issues stored
+- **Connection Status**: Real-time Letta server connectivity (green/yellow/red)
+- **Last Sync Time**: When memory was last updated ("Just now", "5m ago", etc.)
+- **Memory Usage Bar**: Visual indicator of memory capacity utilization
+- **Auto-Refresh**: Dashboard updates automatically every 30 seconds
+
+#### Agent Health Monitoring
+- **Health Indicator**: Header shows agent status with color-coded icons
+  - 🟢 **Green Check**: Agent healthy and fully operational
+  - 🟡 **Yellow Warning**: Minor issues but functional
+  - 🔴 **Red Error**: Significant problems, may be in fallback mode
+- **Detailed Health Info**: Click info button for connection status, response times, provider info
+
+#### Memory Summary and Analytics
+- **View Summary Button**: Click in memory dashboard for detailed breakdown
+- **Knowledge Categories**: Shows counts of entities, events, issues, facts
+- **Pattern Analysis**: Key actors, temporal trends, document focus areas
+- **Memory Quality Metrics**: Completeness, accuracy, and relevance scores
+
+#### Memory Export and Management
+- **Export Options**: JSON, CSV, or Markdown formats for analysis or backup
+- **Import Capability**: Restore memory from backups or migrate between systems
+- **Memory Pruning**: Automatic or manual cleanup of old/low-importance items
+- **Backup Integration**: Memory included in automated system backups
+
+*For detailed memory management instructions, see the [Letta Configuration Guide](LETTA_CONFIGURATION.md).*
 
 ### Performance Monitoring
 
@@ -396,7 +472,21 @@ Monitor application performance:
 **Memory Issues**
 - Monitor `/api/health` for resource status
 - Process fewer documents at once
-- Clear browser cache if using browser mode
+
+**Letta Memory Problems**
+- Check connection status in memory dashboard (should be green)
+- Restart application if server shows as disconnected
+- Verify memory operations with purple badges and notifications
+- Review memory summary for accurate information storage
+- Clear browser cache if UI indicators not updating
+
+**Agent Not Responding**
+- Check agent health indicator in header (should be green)
+- Look for "Memory Enhanced" badges on responses - if missing, memory may be offline
+- Restart application to reinitialize Letta server connection
+- Check logs at `~/.letta-claim/logs/` for specific error messages
+
+*For comprehensive troubleshooting, see the [Letta Troubleshooting Guide](LETTA_TROUBLESHOOTING.md).*
 
 ### Getting Help
 

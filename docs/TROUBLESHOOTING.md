@@ -44,6 +44,55 @@ df -h ~/LettaClaims
 free -h
 ```
 
+## Letta Memory Issues
+
+For comprehensive troubleshooting of Letta agent memory features, see the **[Letta Troubleshooting Guide](LETTA_TROUBLESHOOTING.md)**.
+
+### Quick Letta Diagnostics
+
+#### Check Letta Server Status
+```bash
+# Test Letta server connectivity
+curl http://localhost:8283/v1/health/
+
+# Check if Letta server process is running
+ps aux | grep "letta server"
+
+# Check Letta server logs
+tail -f ~/.letta-claim/logs/letta-server.log
+```
+
+#### Memory Dashboard Indicators
+- **Green Connection**: Letta server connected and operational
+- **Yellow Warning**: Connection issues or degraded performance
+- **Red Error**: Server disconnected or critical errors
+- **Memory Item Count**: Should increase as you upload documents and chat
+- **Last Sync**: Should show recent timestamps ("Just now", "2m ago")
+
+#### Common Quick Fixes
+```bash
+# Restart application (fixes most Letta connection issues)
+pkill -f letta-claim-assistant
+python main.py
+
+# Reset Letta server configuration
+rm ~/.letta-claim/letta-server.yaml
+# Application will recreate with defaults on next start
+
+# Check memory operations in recent logs
+grep -i "memory\|letta\|agent" ~/.letta-claim/logs/app.log | tail -20
+```
+
+#### When to Use the Full Letta Troubleshooting Guide
+- Memory features not working (no purple badges on responses)
+- Agent health indicator showing red/yellow status
+- Memory dashboard showing disconnected status
+- Memory operations timing out or failing
+- Agent not remembering previous conversations
+- California domain features not working
+
+*See [Letta Troubleshooting Guide](LETTA_TROUBLESHOOTING.md) for detailed solutions to memory-specific issues.*
+
 ## Installation Issues
 
 ### Issue: System Dependencies Missing

@@ -207,6 +207,96 @@ To use Google Gemini instead of local Ollama:
 2. Configure in application settings (not in config file for security)
 3. The application will prompt for consent when first using external services
 
+## Letta Memory Features Setup
+
+The application includes advanced AI memory features powered by Letta. These features provide persistent memory and learning capabilities.
+
+### Automatic Letta Setup
+
+Letta memory features are configured automatically during installation:
+
+1. **Letta Server**: Automatically started as a local subprocess
+2. **Memory Database**: SQLite database created at `~/.letta-claim/letta.db`
+3. **Agent Creation**: AI agents created automatically for each matter
+4. **California Specialization**: Domain knowledge for California construction law included
+
+### Verifying Letta Installation
+
+Check if Letta is working correctly:
+
+```bash
+# Check Letta server status
+curl http://localhost:8283/v1/health/
+
+# Verify Letta package installation
+python -c "import letta; print(f'Letta {letta.__version__} installed successfully')"
+
+# Check memory database
+ls -la ~/.letta-claim/letta.db
+```
+
+### Memory Features Configuration
+
+Default memory settings in `~/.letta-claim/config.toml`:
+
+```toml
+[letta]
+enabled = true                    # Enable memory features
+server_mode = "local"            # Local server (recommended)
+server_port = 8283
+auto_start = true               # Start server automatically
+fallback_mode = true           # Graceful degradation
+
+[letta.memory]
+max_items_per_agent = 10000     # Memory capacity per matter
+prune_old_memories = true       # Auto-cleanup old memories
+prune_after_days = 90          # Keep memories for 90 days
+
+[letta.domain]
+enabled = true                  # California construction specialization
+entity_extraction = true       # Extract legal entities
+compliance_validation = true   # Statutory compliance checking
+```
+
+### Troubleshooting Letta Setup
+
+If memory features aren't working:
+
+```bash
+# Check server logs
+tail -f ~/.letta-claim/logs/letta-server.log
+
+# Restart Letta server
+pkill -f "letta server"
+letta server --port 8283 --host localhost &
+
+# Reset configuration
+rm ~/.letta-claim/letta-server.yaml
+# Configuration recreated on next startup
+```
+
+### Memory Features in the UI
+
+After installation, you'll see these memory indicators:
+- **Memory Dashboard**: Right panel showing memory statistics
+- **Agent Health Indicator**: Header showing agent status
+- **Memory Enhanced Badges**: Purple indicators on memory-enhanced responses
+- **Memory Operation Toasts**: Notifications for memory operations
+
+*For comprehensive memory feature documentation, see [Letta User Guide](LETTA_USER_GUIDE.md).*
+
+### Disabling Memory Features (Optional)
+
+To disable Letta memory features if not needed:
+
+```toml
+# In ~/.letta-claim/config.toml
+[letta]
+enabled = false
+```
+
+The application will continue working with standard RAG features but without persistent memory.
+
 ## Running the Application
 
 ### Desktop Mode (Recommended)

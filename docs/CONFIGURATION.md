@@ -261,18 +261,60 @@ model = "gemini-2.5-flash"
 
 ### [letta] - Agent Memory Settings
 
-Controls the AI agent's persistent memory system.
+Controls the AI agent's persistent memory system. For comprehensive Letta configuration, see the [Letta Configuration Guide](LETTA_CONFIGURATION.md).
 
-#### enable_filesystem
-- **Type:** Boolean
-- **Default:** `true`
-- **Description:** Whether to enable Letta filesystem for document references
-
-**Example:**
+#### Basic Settings
 ```toml
 [letta]
-enable_filesystem = true
+enabled = true                    # Enable Letta memory features
+server_mode = "local"            # local, docker, external
+server_host = "localhost"
+server_port = 8283
+auto_start = true               # Start Letta server automatically
+fallback_mode = true           # Graceful degradation when unavailable
 ```
+
+#### Memory Configuration
+```toml
+[letta.memory]
+max_items_per_agent = 10000     # Maximum memory items per matter
+prune_old_memories = true       # Automatically remove old memories
+prune_after_days = 90          # Remove memories older than N days
+importance_threshold = 0.5      # Minimum importance score to keep
+enable_deduplication = true     # Remove duplicate memories
+```
+
+#### Performance Settings
+```toml
+[letta.performance]
+connection_timeout = 30         # Connection timeout in seconds
+request_timeout = 60           # Request timeout in seconds
+max_retries = 3                # Maximum retry attempts
+batch_size = 100               # Batch size for memory operations
+health_check_interval = 30      # Health check frequency
+```
+
+#### California Domain Specialization
+```toml
+[letta.domain]
+enabled = true                  # Enable California construction specialization
+entity_extraction = true       # Extract California entities (Caltrans, etc.)
+compliance_validation = true   # Validate California statutory compliance
+followup_generation = true     # Generate California-specific follow-ups
+expert_triggers = true         # Suggest expert consultation when needed
+```
+
+#### Advanced Settings
+```toml
+[letta.advanced]
+debug_logging = false          # Enable debug logging
+log_requests = false          # Log requests (don't log responses - sensitive data)
+circuit_breaker = true        # Enable circuit breaker for fault tolerance
+request_queue = true          # Enable request queuing and batching
+memory_export_encryption = true  # Encrypt memory exports
+```
+
+*See [Letta Configuration Guide](LETTA_CONFIGURATION.md) for detailed configuration instructions.*
 
 ### [monitoring] - Performance Monitoring
 
