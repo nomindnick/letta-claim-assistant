@@ -12,6 +12,7 @@ import json
 import os
 
 from .logging_conf import get_logger
+from .letta_domain_california import california_domain
 
 logger = get_logger(__name__)
 
@@ -282,7 +283,8 @@ class LettaConfigManager:
         self,
         matter_name: str,
         llm_provider: Optional[str] = None,
-        llm_model: Optional[str] = None
+        llm_model: Optional[str] = None,
+        use_california_domain: bool = True
     ) -> LettaAgentConfig:
         """
         Get agent configuration for a specific matter.
@@ -291,15 +293,18 @@ class LettaConfigManager:
             matter_name: Name of the matter
             llm_provider: Override LLM provider
             llm_model: Override LLM model
+            use_california_domain: Use California public works specialization
             
         Returns:
             Agent configuration
         """
-        config = LettaAgentConfig(
-            name=f"claim-assistant-{matter_name}",
-            llm_provider=llm_provider or "ollama",
-            llm_model=llm_model or "gpt-oss:20b",
-            system_prompt=f"""You are a construction claims analyst assistant for the matter: {matter_name}.
+        # Use California domain configuration if enabled
+        if use_california_domain:
+            system_prompt = california_domain.get_system_prompt(matter_name)
+            memory_blocks = california_domain.get_memory_blocks(matter_name)
+        else:
+            # Fallback to generic construction claims
+            system_prompt = f"""You are a construction claims analyst assistant for the matter: {matter_name}.
 
 Your role is to:
 - Analyze construction documents, contracts, and claims
@@ -308,8 +313,8 @@ Your role is to:
 - Provide insights about causation, responsibility, and damages
 - Remember key dates, parties, and technical details
 
-You have persistent memory and learn from each conversation to provide better context-aware assistance.""",
-            memory_blocks=[
+You have persistent memory and learn from each conversation to provide better context-aware assistance."""
+            memory_blocks = [
                 {
                     "label": "human",
                     "value": f"Construction attorney working on {matter_name}"
@@ -318,10 +323,17 @@ You have persistent memory and learn from each conversation to provide better co
                     "label": "persona",
                     "value": "Expert construction claims analyst with legal knowledge"
                 }
-            ],
+            ]
+        
+        config = LettaAgentConfig(
+            name=f"claim-assistant-{matter_name}",
+            llm_provider=llm_provider or "ollama",
+            llm_model=llm_model or "gpt-oss:20b",
+            system_prompt=system_prompt,
+            memory_blocks=memory_blocks,
             metadata={
                 "matter_name": matter_name,
-                "domain": "construction_claims"
+                "domain": "california_public_works" if use_california_domain else "construction_claims"
             }
         )
         

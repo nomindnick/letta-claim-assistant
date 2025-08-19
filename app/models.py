@@ -352,3 +352,62 @@ class RetrievalWeights(BaseModel):
     recency_boost: float = Field(default=0.1, ge=0.0, le=1.0, description="Recency boost weight")
     diversity_factor: float = Field(default=0.15, ge=0.0, le=1.0, description="Diversity factor weight")
     temporal_decay_days: int = Field(default=30, ge=1, le=365, description="Temporal decay period in days")
+
+
+class CaliforniaStatute(BaseModel):
+    """California statute reference."""
+    code_type: Literal["PCC", "GC", "CC", "LC", "BPC"] = Field(..., description="Code type")
+    section: str = Field(..., description="Section number")
+    citation: str = Field(..., description="Full citation")
+    description: Optional[str] = Field(None, description="Description of statute")
+    context: str = Field(..., description="Context where found")
+
+
+class CaliforniaDeadline(BaseModel):
+    """California statutory deadline."""
+    deadline_type: str = Field(..., description="Type of deadline")
+    statute: str = Field(..., description="Governing statute")
+    days: int = Field(..., ge=0, description="Days for deadline")
+    trigger_event: str = Field(..., description="Event triggering deadline")
+    deadline_date: Optional[datetime] = Field(None, description="Calculated deadline date")
+    days_remaining: Optional[int] = Field(None, description="Days remaining")
+    consequence: str = Field(..., description="Consequence of missing deadline")
+
+
+class CaliforniaEntity(BaseModel):
+    """California public entity."""
+    name: str = Field(..., description="Entity name")
+    entity_type: Literal["state", "county", "city", "district", "authority"] = Field(..., description="Entity type")
+    abbreviation: Optional[str] = Field(None, description="Common abbreviation")
+    special_requirements: List[str] = Field(default_factory=list, description="Special requirements")
+
+
+class CaliforniaClaimData(BaseModel):
+    """California construction claim data."""
+    claim_type: Literal["differing_site_conditions", "delay", "changes", "payment", "termination"] = Field(..., description="Claim type")
+    public_entity: Optional[CaliforniaEntity] = Field(None, description="Public entity involved")
+    statutes: List[CaliforniaStatute] = Field(default_factory=list, description="Relevant statutes")
+    deadlines: List[CaliforniaDeadline] = Field(default_factory=list, description="Applicable deadlines")
+    notices_required: List[str] = Field(default_factory=list, description="Required notices")
+    notices_served: List[Dict[str, Any]] = Field(default_factory=list, description="Notices already served")
+    government_claim_filed: bool = Field(default=False, description="Whether government claim filed")
+    government_claim_date: Optional[datetime] = Field(None, description="Date government claim filed")
+    prevailing_wage_compliance: bool = Field(default=False, description="Prevailing wage compliance status")
+    bond_claims: List[Dict[str, Any]] = Field(default_factory=list, description="Bond claims if any")
+    
+    class Config:
+        """Pydantic configuration."""
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class CaliforniaValidationResult(BaseModel):
+    """California claim validation result."""
+    is_valid: bool = Field(..., description="Whether claim is valid")
+    compliance_score: float = Field(..., ge=0.0, le=1.0, description="Compliance score")
+    errors: List[Dict[str, Any]] = Field(default_factory=list, description="Validation errors")
+    warnings: List[Dict[str, Any]] = Field(default_factory=list, description="Validation warnings")
+    missing_items: List[str] = Field(default_factory=list, description="Missing required items")
+    deadline_risks: List[CaliforniaDeadline] = Field(default_factory=list, description="Upcoming deadline risks")
+    recommendations: List[str] = Field(default_factory=list, description="Compliance recommendations")

@@ -48,6 +48,9 @@ from .letta_connection import connection_manager, ConnectionState
 from .letta_provider_bridge import letta_provider_bridge, ProviderConfiguration
 from .letta_provider_health import provider_health_monitor
 from .letta_cost_tracker import cost_tracker
+from .extractors.california_extractor import california_extractor
+from .followup_templates_california import california_followup_templates
+from .validators.california_validator import california_validator
 
 logger = get_logger(__name__)
 
@@ -465,6 +468,16 @@ class LettaAdapter:
             return
         
         try:
+            # Extract California-specific entities from the interaction
+            combined_text = f"{user_query}\n\n{llm_answer}"
+            ca_entities = california_extractor.extract_all(combined_text)
+            
+            # Create additional knowledge items from California entities
+            ca_knowledge_items = california_extractor.create_knowledge_items(ca_entities)
+            
+            # Combine with existing extracted facts
+            all_facts = extracted_facts + ca_knowledge_items
+            
             # Store the conversation turn in agent memory
             timestamp = datetime.now().isoformat()
             
@@ -475,7 +488,13 @@ class LettaAdapter:
                 "query": user_query[:200],  # Truncate for storage
                 "answer_preview": llm_answer[:300],
                 "sources_count": len(sources),
-                "facts_extracted": len(extracted_facts)
+                "facts_extracted": len(all_facts),
+                "ca_entities": {
+                    "statutes": len(ca_entities.get("statutes", [])),
+                    "agencies": len(ca_entities.get("agencies", [])),
+                    "deadlines": len(ca_entities.get("deadlines", [])),
+                    "claims": len(ca_entities.get("claim_types", []))
+                }
             }
             
             # Store interaction summary with retry
@@ -493,7 +512,7 @@ class LettaAdapter:
             )
             
             # Store each extracted knowledge item
-            for fact in extracted_facts:
+            for fact in all_facts:
                 fact_data = {
                     "type": fact.type,
                     "label": fact.label,
@@ -518,8 +537,8 @@ class LettaAdapter:
                 )
             
             # Update core memory with recent activity context
-            if extracted_facts:
-                recent_facts = ", ".join([f"{fact.type}: {fact.label}" for fact in extracted_facts[:3]])
+            if all_facts:
+                recent_facts = ", ".join([f"{fact.type}: {fact.label}" for fact in all_facts[:3]])
                 core_update = f"Recent discussion: {user_query[:100]}... Key items: {recent_facts}"
                 
                 # Get current agent state to update memory
@@ -539,7 +558,8 @@ class LettaAdapter:
             
             logger.debug(
                 "Interaction stored successfully",
-                facts_stored=len(extracted_facts),
+                facts_stored=len(all_facts),
+                ca_entities_extracted=len(ca_knowledge_items),
                 interaction_id=timestamp,
                 query_preview=user_query[:50]
             )
@@ -779,17 +799,34 @@ class LettaAdapter:
             return self._fallback_followups()
         
         try:
-            # Use agent's memory and context to generate follow-ups
+            # Extract California entities for context
+            combined_text = f"{user_query}\n\n{llm_answer}"
+            ca_entities = california_extractor.extract_all(combined_text)
+            
+            # Get California-specific follow-up questions
+            ca_followups = california_followup_templates.get_relevant_followups(
+                query=user_query,
+                answer=llm_answer,
+                extracted_entities=ca_entities,
+                max_questions=4
+            )
+            
+            # Extract just the questions
+            if ca_followups:
+                return [f["question"] for f in ca_followups]
+            
+            # Fallback to agent-generated follow-ups
             followup_prompt = f"""
-Based on this construction claims discussion:
+Based on this California public works construction claims discussion:
 Q: {user_query}
 A: {llm_answer[:500]}...
 
-Generate 3-4 specific follow-up questions that would help a construction attorney analyze this claim further. Focus on:
-- Causation and responsibility
-- Damages and costs
-- Additional evidence needed
-- Related issues or claims
+Generate 3-4 specific follow-up questions for a California construction attorney. Focus on:
+- California statutory requirements and deadlines
+- Public entity procedures and requirements
+- Prevailing wage and DIR compliance
+- Government claims and notice requirements
+- Evidence and documentation needs
 
 Return only the questions, one per line."""
             
@@ -2233,6 +2270,69 @@ Return only the questions, one per line."""
             "What are the potential damages or cost implications?",
             "Should we engage technical experts for further analysis?"
         ]
+    
+    async def validate_california_claim(
+        self,
+        claim_type: str,
+        claim_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Validate a California construction claim for compliance.
+        
+        Args:
+            claim_type: Type of claim
+            claim_data: Claim information
+            
+        Returns:
+            Validation results dictionary
+        """
+        try:
+            # Extract entities from claim data if text provided
+            extracted_entities = None
+            if "text" in claim_data or "description" in claim_data:
+                text = claim_data.get("text") or claim_data.get("description", "")
+                extracted_entities = california_extractor.extract_all(text)
+            
+            # Validate the claim
+            validation = california_validator.validate_claim(
+                claim_type=claim_type,
+                claim_data=claim_data,
+                extracted_entities=extracted_entities
+            )
+            
+            return {
+                "is_valid": validation.is_valid,
+                "compliance_score": validation.compliance_score,
+                "errors": [
+                    {
+                        "category": r.category,
+                        "item": r.item,
+                        "message": r.message,
+                        "statute": r.statute,
+                        "recommendation": r.recommendation
+                    }
+                    for r in validation.errors
+                ],
+                "warnings": [
+                    {
+                        "category": r.category,
+                        "item": r.item,
+                        "message": r.message,
+                        "statute": r.statute,
+                        "recommendation": r.recommendation
+                    }
+                    for r in validation.warnings
+                ],
+                "missing_items": validation.missing_items,
+                "deadline_risks": validation.deadline_risks
+            }
+            
+        except Exception as e:
+            logger.error(f"California claim validation failed: {e}")
+            return {
+                "is_valid": False,
+                "error": str(e)
+            }
     
     def _check_existing_data(self) -> None:
         """

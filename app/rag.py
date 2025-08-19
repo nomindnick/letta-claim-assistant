@@ -30,6 +30,9 @@ from .citation_manager import CitationManager, CitationMapping, CitationMetrics
 from .followup_engine import FollowupEngine, FollowupContext
 from .hybrid_retrieval import HybridRetrieval, HybridRetrievalContext, create_retrieval_context, EnhancedSearchResult
 from .quality_metrics import QualityAnalyzer, ResponseQualityMetrics, QualityThresholds
+# California domain features
+from .extractors.california_extractor import california_extractor
+from .letta_domain_california import california_domain
 
 logger = get_logger(__name__)
 
@@ -219,14 +222,36 @@ class RAGEngine:
             
             # Memory items are now retrieved in Step 1 for both hybrid and basic modes
             
-            # Step 3: Assemble prompt
-            logger.debug("Assembling RAG prompt")
-            messages = assemble_rag_prompt(query, search_results, memory_items)
+            # Step 3: Assemble prompt with California domain context
+            logger.debug("Assembling RAG prompt with California domain context")
             
-            # Step 4: Generate answer
+            # Extract California entities from query for additional context
+            ca_entities = california_extractor.extract_all(query)
+            
+            # Add California context to prompt if entities found
+            california_context = ""
+            if ca_entities.get("statutes") or ca_entities.get("agencies") or ca_entities.get("deadlines"):
+                california_context = "\n\nCalifornia Context Detected:\n"
+                if ca_entities.get("statutes"):
+                    california_context += f"- Statutes referenced: {', '.join([s['citation'] for s in ca_entities['statutes'][:3]])}\n"
+                if ca_entities.get("agencies"):
+                    california_context += f"- Public entities: {', '.join([a['name'] for a in ca_entities['agencies'][:3]])}\n"
+                if ca_entities.get("deadlines"):
+                    california_context += f"- Deadlines mentioned: {', '.join([d['text'] for d in ca_entities['deadlines'][:3]])}\n"
+                california_context += "\nProvide California-specific legal analysis considering statutory requirements and public entity procedures."
+            
+            messages = assemble_rag_prompt(query + california_context, search_results, memory_items)
+            
+            # Step 4: Generate answer with enhanced system prompt for California
             logger.debug("Generating answer with LLM")
+            
+            # Use California-enhanced system prompt if domain detected
+            system_prompt = SYSTEM_PROMPT
+            if ca_entities and any(ca_entities.values()):
+                system_prompt = f"{SYSTEM_PROMPT}\n\nYou have specialized knowledge of California public works construction law, including Public Contract Code, Government Code claims procedures, mechanics liens, prevailing wage requirements, and public entity requirements. Provide precise statutory citations and deadline information when relevant."
+            
             answer = await self.llm_provider.generate(
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature
