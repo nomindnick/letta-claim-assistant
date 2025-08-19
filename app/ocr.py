@@ -348,7 +348,7 @@ class OCRProcessor:
                 # Log the actual error for debugging
                 logger.error(
                     "OCR process failed",
-                    return_code=return_code,
+                    return_code=process.returncode,
                     stderr_output=stderr_text[:1000],  # First 1000 chars
                     file_path=str(cmd[-2])
                 )
