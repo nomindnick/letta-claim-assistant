@@ -570,7 +570,10 @@ class JobQueue:
         """Execute PDF ingestion job."""
         from .matters import matter_manager
         from .ingest import IngestionPipeline, IngestionError
+        from .vectors import VectorStore
+        from .chunking import Chunk
         from pathlib import Path
+        import json
         
         # Extract parameters
         matter_id = params.get("matter_id")
@@ -601,8 +604,50 @@ class JobQueue:
                 pdf_files=pdf_files,
                 force_ocr=force_ocr,
                 ocr_language=ocr_language,
-                progress_callback=progress_callback
+                progress_callback=lambda p, m: progress_callback(p * 0.7, m)  # OCR/parsing/chunking is 70% of work
             )
+            
+            # Now embed and store chunks in vector database
+            progress_callback(0.7, "Embedding and storing document chunks...")
+            
+            # Initialize vector store
+            vector_store = VectorStore(matter.paths.root)
+            
+            # Collect all chunks from successful ingestions
+            all_chunks = []
+            for file_path, stats in results.items():
+                if stats.success and stats.total_chunks > 0:
+                    # Load chunks from the saved JSONL file
+                    chunks_path = matter.paths.parsed / f"{stats.doc_id}_chunks.jsonl"
+                    if chunks_path.exists():
+                        with open(chunks_path, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                chunk_data = json.loads(line)
+                                # Reconstruct Chunk object from JSON data
+                                chunk = Chunk(
+                                    chunk_id=chunk_data["chunk_id"],
+                                    text=chunk_data["text"],
+                                    doc_id=chunk_data["doc_id"],
+                                    doc_name=chunk_data["doc_name"],
+                                    page_start=chunk_data["page_start"],
+                                    page_end=chunk_data["page_end"],
+                                    token_count=chunk_data["token_count"],
+                                    char_count=chunk_data["char_count"],
+                                    md5=chunk_data["md5"],
+                                    section_title=chunk_data.get("section_title"),
+                                    chunk_index=chunk_data["chunk_index"],
+                                    overlap_info=chunk_data.get("overlap_info", {}),
+                                    metadata=chunk_data.get("metadata", {})
+                                )
+                                all_chunks.append(chunk)
+            
+            # Embed and store chunks
+            if all_chunks:
+                progress_callback(0.8, f"Embedding {len(all_chunks)} chunks...")
+                await vector_store.upsert_chunks(all_chunks)
+                progress_callback(0.95, "Finalizing vector storage...")
+            
+            progress_callback(1.0, "Ingestion completed")
             
             # Calculate summary statistics
             successful_files = sum(1 for r in results.values() if r.success)
@@ -616,6 +661,7 @@ class JobQueue:
                 "failed_files": failed_files,
                 "total_pages": total_pages,
                 "total_chunks": total_chunks,
+                "chunks_embedded": len(all_chunks),
                 "results": {str(k): {
                     "doc_name": v.doc_name,
                     "success": v.success,

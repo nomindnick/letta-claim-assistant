@@ -74,7 +74,7 @@ class OllamaProvider(BaseLLMProvider):
                 async with session.post(
                     self.chat_url,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120)  # 2 minute timeout for generation
+                    timeout=aiohttp.ClientTimeout(total=600)  # 10 minute timeout for large models
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
@@ -100,14 +100,19 @@ class OllamaProvider(BaseLLMProvider):
                             eval_count=data.get("eval_count", 0)
                         )
                         
+                        # Check for empty response
+                        if not generated_text or not generated_text.strip():
+                            logger.error("LLM generated empty response", model=self.model_name)
+                            raise RuntimeError("LLM generated empty response")
+                        
                         return generated_text.strip()
                     else:
                         logger.error("Invalid response format from Ollama", response_data=data)
                         raise RuntimeError("Invalid response format from Ollama API")
                         
         except asyncio.TimeoutError:
-            logger.error("Ollama generation timeout", model=self.model_name, timeout=120)
-            raise RuntimeError(f"Generation timed out after 120 seconds")
+            logger.error("Ollama generation timeout", model=self.model_name, timeout=600)
+            raise RuntimeError(f"Generation timed out after 600 seconds")
         except Exception as e:
             logger.error("Ollama generation error", error=str(e), model=self.model_name)
             raise RuntimeError(f"Generation failed: {str(e)}")

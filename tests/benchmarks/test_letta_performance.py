@@ -619,8 +619,7 @@ class TestQueuePerformance:
                     track_operation,
                     RequestType.OTHER,
                     priority=RequestPriority.LOW,
-                    id=f"low-{i}",
-                    priority=RequestPriority.LOW
+                    id=f"low-{i}"
                 )
                 futures.append(future)
             

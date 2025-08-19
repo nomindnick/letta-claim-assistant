@@ -18,18 +18,25 @@ Welcome to the Letta Construction Claim Assistant! This guide will help you effe
 
 ### First Launch
 
-1. **Start the Application**
+1. **Activate Virtual Environment**
+   ```bash
+   source venv/bin/activate  # On Linux/Mac
+   # or
+   venv\Scripts\activate     # On Windows
+   ```
+
+2. **Start the Application**
    ```bash
    python main.py
    ```
    The application opens in desktop mode by default.
 
-2. **Initial Setup**
+3. **Initial Setup**
    - The application validates your system on first run
    - If any issues are found, follow the suggestions provided
    - Check that Ollama is running and models are available
 
-3. **Interface Overview**
+4. **Interface Overview**
    The application has a 3-pane layout:
    - **Left Pane**: Matter management and document list
    - **Center Pane**: Chat interface for questions and answers

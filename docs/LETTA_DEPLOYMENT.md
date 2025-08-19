@@ -133,9 +133,11 @@ sudo apt install -y docker.io docker-compose-v2
 
 #### Python Environment
 ```bash
-# Create virtual environment
-python3.11 -m venv /opt/letta-claim-assistant/.venv
-source /opt/letta-claim-assistant/.venv/bin/activate
+# Create virtual environment (use venv instead of .venv)
+python3.11 -m venv /opt/letta-claim-assistant/venv
+source /opt/letta-claim-assistant/venv/bin/activate  # On Linux/Mac
+# or
+/opt/letta-claim-assistant/venv/Scripts/activate      # On Windows
 
 # Install application
 pip install letta-claim-assistant[all]
@@ -167,8 +169,10 @@ git clone https://github.com/your-org/letta-claim-assistant.git
 cd letta-claim-assistant
 
 # Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 
 # Install dependencies
 pip install -r requirements.txt
@@ -439,7 +443,7 @@ Group=letta-group
 WorkingDirectory=/opt/letta-claim-assistant
 Environment=PYTHONPATH=/opt/letta-claim-assistant
 EnvironmentFile=/etc/letta-claim-assistant/environment
-ExecStart=/opt/letta-claim-assistant/.venv/bin/python -m letta_claim_assistant
+ExecStart=/opt/letta-claim-assistant/venv/bin/python -m letta_claim_assistant
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
@@ -1125,7 +1129,9 @@ curl http://localhost:8000/api/health
 sudo apt update && sudo apt upgrade -y
 
 # Update Python packages
-source /opt/letta-claim-assistant/.venv/bin/activate
+source /opt/letta-claim-assistant/venv/bin/activate  # On Linux/Mac
+# or
+/opt/letta-claim-assistant/venv/Scripts/activate      # On Windows
 pip list --outdated
 pip install --upgrade pip
 

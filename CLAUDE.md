@@ -27,6 +27,7 @@ Before starting ANY development work, you MUST:
 
 4. **Verify Environment Setup**
    - Confirm all system dependencies are installed
+   - Activate virtual environment: `source venv/bin/activate` (Linux/Mac) or `venv\Scripts\activate` (Windows)
    - Check Python environment and package installations
    - Validate external services (Ollama, models) are available
 
@@ -239,6 +240,11 @@ async def upload_files_endpoint(matter_id: str, files: List[UploadFile]):
 You MUST run these commands and ensure they pass:
 
 ```bash
+# Activate virtual environment first
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
+
 # Install test dependencies if not present
 pip install pytest pytest-asyncio
 

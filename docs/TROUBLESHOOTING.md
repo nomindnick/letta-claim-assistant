@@ -35,6 +35,8 @@ ollama list
 
 # Check Python environment
 python --version
+# Ensure virtual environment is activated
+which python  # Should show path to venv/bin/python
 pip list | grep -E "(nicegui|chromadb|ollama|letta)"
 
 # Check disk space
@@ -73,6 +75,10 @@ tail -f ~/.letta-claim/logs/letta-server.log
 ```bash
 # Restart application (fixes most Letta connection issues)
 pkill -f letta-claim-assistant
+# Activate virtual environment first
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 python main.py
 
 # Reset Letta server configuration
@@ -137,7 +143,8 @@ tesseract --version
 **Diagnosis:**
 ```bash
 # Check virtual environment
-echo $VIRTUAL_ENV
+echo $VIRTUAL_ENV  # Should show path to project venv
+which python       # Should point to venv/bin/python
 pip check
 pip list --outdated
 ```
@@ -146,9 +153,11 @@ pip list --outdated
 ```bash
 # Recreate virtual environment
 deactivate
-rm -rf .venv
-python3 -m venv .venv
-source .venv/bin/activate
+rm -rf venv
+python3 -m venv venv
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 
 # Upgrade pip and install dependencies
 pip install --upgrade pip
@@ -565,7 +574,9 @@ iptables -L | grep 8000
 ```bash
 # Start application
 cd /path/to/letta-claim-assistant
-source .venv/bin/activate
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 python main.py
 ```
 
@@ -688,7 +699,9 @@ cp -r ~/LettaClaims ~/LettaClaims.backup
 # Reset environment
 rm -rf .venv
 python3 -m venv .venv
-source .venv/bin/activate
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 pip install -r requirements.txt
 
 # Reset configuration

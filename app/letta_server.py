@@ -121,6 +121,12 @@ class LettaServerManager:
             logger.debug("Server already running")
             return True
         
+        # Check if a server is already running on the configured port
+        if self.health_check():
+            logger.info(f"Letta server already running on {self.host}:{self.port}")
+            self._is_running = True
+            return True
+        
         try:
             if self.mode == "subprocess":
                 return self._start_subprocess()

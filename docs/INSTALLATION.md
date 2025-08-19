@@ -110,11 +110,13 @@ cd letta-claim-assistant-1.0.0
 #### Step 4: Set Up Python Environment
 
 ```bash
-# Create virtual environment
-python3 -m venv .venv
+# Create virtual environment (use venv instead of .venv)
+python3 -m venv venv
 
 # Activate virtual environment
-source .venv/bin/activate
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 
 # Upgrade pip
 pip install --upgrade pip
@@ -303,7 +305,9 @@ The application will continue working with standard RAG features but without per
 
 ```bash
 # Activate virtual environment
-source .venv/bin/activate
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 
 # Start the application
 python main.py
@@ -421,7 +425,9 @@ chmod -R 755 ~/LettaClaims
 **Solution**:
 ```bash
 # Ensure virtual environment is activated
-source .venv/bin/activate
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 
 # Reinstall dependencies
 pip install -r requirements.txt
@@ -474,7 +480,9 @@ cd letta-claim-assistant
 git pull origin main
 
 # Activate virtual environment
-source .venv/bin/activate
+source venv/bin/activate  # On Linux/Mac
+# or
+venv\Scripts\activate     # On Windows
 
 # Update dependencies
 pip install -r requirements.txt --upgrade
@@ -499,8 +507,8 @@ ollama pull nomic-embed-text
 # Remove application directory
 rm -rf /path/to/letta-claim-assistant
 
-# Remove virtual environment
-rm -rf /path/to/letta-claim-assistant/.venv
+# Remove virtual environment (if inside project directory)
+rm -rf /path/to/letta-claim-assistant/venv
 
 # Remove desktop entry
 rm ~/.local/share/applications/letta-claim-assistant.desktop
