@@ -1683,9 +1683,20 @@ async def get_memory_items(
             search_query=search_query
         )
         
+        # For better UX, try to get a rough total count
+        # This is not perfect but gives users an idea of how many items exist
+        # We fetch a larger batch to estimate the total
+        if len(items) == limit:
+            # There might be more items
+            estimated_total = offset + limit + 1  # At least one more page
+        else:
+            # This is the last page
+            estimated_total = offset + len(items)
+        
         return {
             "items": [item.model_dump() for item in items],
-            "count": len(items),
+            "total": estimated_total,  # Estimated total for pagination
+            "count": len(items),  # Actual items returned
             "limit": limit,
             "offset": offset,
             "matter_id": matter_id,

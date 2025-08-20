@@ -464,6 +464,49 @@ class APIClient:
             logger.error("Failed to get memory summary", error=str(e))
             raise
     
+    async def get_memory_items(
+        self, 
+        matter_id: str, 
+        limit: int = 50, 
+        offset: int = 0,
+        type_filter: Optional[str] = None,
+        search_query: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Get memory items for a matter with pagination and filtering."""
+        session = await self._get_session()
+        try:
+            params = {
+                "limit": limit,
+                "offset": offset
+            }
+            if type_filter:
+                params["type_filter"] = type_filter
+            if search_query:
+                params["search_query"] = search_query
+            
+            async with session.get(
+                f"{self.base_url}/api/matters/{matter_id}/memory/items",
+                params=params
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to get memory items", error=str(e))
+            raise
+    
+    async def get_memory_item(self, matter_id: str, item_id: str) -> Dict[str, Any]:
+        """Get a specific memory item by ID."""
+        session = await self._get_session()
+        try:
+            async with session.get(
+                f"{self.base_url}/api/matters/{matter_id}/memory/items/{item_id}"
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to get memory item", error=str(e))
+            raise
+    
     # Health Check
     async def health_check(self) -> bool:
         """Check if backend API is healthy."""

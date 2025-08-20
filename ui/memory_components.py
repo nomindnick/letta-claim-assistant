@@ -9,6 +9,7 @@ from nicegui import ui
 from typing import Optional, Dict, Any, List
 import asyncio
 from datetime import datetime, timedelta
+from .memory_viewer import MemoryViewer
 
 
 class MemoryStatusBadge:
@@ -77,6 +78,7 @@ class MemoryStatsDashboard:
         self.refresh_callback = None  # Callback to trigger refresh from parent
         self.api_client = api_client
         self.current_matter_id = None
+        self.memory_viewer = None  # Will be created on demand
         
     def create(self) -> ui.element:
         """Create the memory statistics dashboard."""
@@ -115,12 +117,19 @@ class MemoryStatsDashboard:
                     color='purple'
                 ).classes('w-full h-2')
                 
-                # Summary button
-                self.summary_button = ui.button(
-                    'View Summary',
-                    icon='summarize',
-                    on_click=self._show_memory_summary
-                ).props('outline size=sm').classes('w-full mt-2')
+                # Action buttons
+                with ui.row().classes('w-full gap-2 mt-2'):
+                    self.summary_button = ui.button(
+                        'View Summary',
+                        icon='summarize',
+                        on_click=self._show_memory_summary
+                    ).props('outline size=sm').classes('flex-1')
+                    
+                    self.view_all_button = ui.button(
+                        'View All Memories',
+                        icon='visibility',
+                        on_click=self._show_memory_viewer
+                    ).props('outline size=sm').classes('flex-1')
         
         self.dashboard_container = container
         return container
@@ -293,6 +302,19 @@ class MemoryStatsDashboard:
                 
                 close_button.visible = True
                 ui.notify(f"Failed to load memory summary: {str(e)}", type="negative")
+    
+    async def _show_memory_viewer(self):
+        """Show the memory viewer dialog."""
+        if not self.api_client or not self.current_matter_id:
+            ui.notify("No matter selected or API client not available", type="warning")
+            return
+        
+        # Create memory viewer if not exists
+        if not self.memory_viewer:
+            self.memory_viewer = MemoryViewer(api_client=self.api_client)
+        
+        # Show the viewer
+        await self.memory_viewer.show(self.current_matter_id)
     
     def start_auto_refresh(self, interval: float = 30.0):
         """Start auto-refresh timer."""

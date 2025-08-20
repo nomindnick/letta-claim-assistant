@@ -2298,20 +2298,25 @@ Return only the questions, one per line."""
         
         try:
             # Fetch passages from Letta
-            # Note: Letta API doesn't support offset directly, so we fetch more and slice
-            fetch_limit = limit + offset if offset > 0 else limit
+            # When filtering by type, we need to fetch more items since we'll filter some out
+            # This is a workaround since Letta doesn't support server-side type filtering
+            if type_filter:
+                # Fetch more items to account for filtering
+                fetch_limit = (limit + offset) * 5  # Fetch 5x to ensure we get enough after filtering
+            else:
+                fetch_limit = limit + offset if offset > 0 else limit
             
             passages = await self.client.agents.passages.list(
                 agent_id=self.agent_id,
                 search=search_query,
-                limit=fetch_limit
+                limit=min(fetch_limit, 1000)  # Cap at 1000 to avoid too large requests
             )
             
             if not passages:
                 return []
             
-            # Convert passages to MemoryItem objects
-            memory_items = []
+            # Convert passages to MemoryItem objects and apply type filter
+            all_memory_items = []
             for passage in passages:
                 try:
                     item = MemoryItem.from_passage(passage)
@@ -2320,7 +2325,7 @@ Return only the questions, one per line."""
                     if type_filter and item.type != type_filter:
                         continue
                     
-                    memory_items.append(item)
+                    all_memory_items.append(item)
                 except Exception as e:
                     logger.warning(
                         "Failed to parse passage as MemoryItem",
@@ -2328,11 +2333,8 @@ Return only the questions, one per line."""
                         error=str(e)
                     )
             
-            # Apply offset and limit
-            if offset > 0:
-                memory_items = memory_items[offset:]
-            if len(memory_items) > limit:
-                memory_items = memory_items[:limit]
+            # Apply offset and limit to the filtered results
+            memory_items = all_memory_items[offset:offset + limit]
             
             logger.info(
                 "Retrieved memory items",
