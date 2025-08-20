@@ -6,7 +6,7 @@ job status tracking, chat/RAG operations, and settings management.
 """
 
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -1650,6 +1650,89 @@ async def get_memory_summary(matter_id: str, max_length: Optional[int] = 500):
     except Exception as e:
         logger.error(f"Failed to get memory summary: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get memory summary: {str(e)}")
+
+
+@app.get("/api/matters/{matter_id}/memory/items")
+async def get_memory_items(
+    matter_id: str,
+    limit: int = Query(50, ge=1, le=1000, description="Maximum number of items to return"),
+    offset: int = Query(0, ge=0, description="Number of items to skip"),
+    type_filter: Optional[str] = Query(None, description="Filter by memory type (Entity, Event, Issue, Fact, Interaction, Raw)"),
+    search_query: Optional[str] = Query(None, description="Search query to filter memories")
+):
+    """Get individual memory items with pagination and filtering."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_path=matter.paths.root,
+            matter_name=matter.name,
+            matter_id=matter.id
+        )
+        
+        # Get memory items
+        items = await letta_adapter.get_memory_items(
+            limit=limit,
+            offset=offset,
+            type_filter=type_filter,
+            search_query=search_query
+        )
+        
+        return {
+            "items": [item.model_dump() for item in items],
+            "count": len(items),
+            "limit": limit,
+            "offset": offset,
+            "matter_id": matter_id,
+            "matter_name": matter.name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get memory items: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get memory items: {str(e)}")
+
+
+@app.get("/api/matters/{matter_id}/memory/items/{item_id}")
+async def get_memory_item(matter_id: str, item_id: str):
+    """Get a specific memory item by ID."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_path=matter.paths.root,
+            matter_name=matter.name,
+            matter_id=matter.id
+        )
+        
+        # Get specific memory item
+        item = await letta_adapter.get_memory_item(item_id)
+        
+        if not item:
+            raise HTTPException(status_code=404, detail=f"Memory item not found: {item_id}")
+        
+        return {
+            "item": item.model_dump(),
+            "matter_id": matter_id,
+            "matter_name": matter.name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get memory item: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get memory item: {str(e)}")
 
 
 # Health check endpoint

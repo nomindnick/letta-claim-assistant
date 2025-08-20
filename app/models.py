@@ -411,3 +411,99 @@ class CaliforniaValidationResult(BaseModel):
     missing_items: List[str] = Field(default_factory=list, description="Missing required items")
     deadline_risks: List[CaliforniaDeadline] = Field(default_factory=list, description="Upcoming deadline risks")
     recommendations: List[str] = Field(default_factory=list, description="Compliance recommendations")
+
+
+class MemoryItem(BaseModel):
+    """Individual memory item from Letta agent's knowledge base."""
+    
+    id: str = Field(..., description="Unique passage ID from Letta")
+    text: str = Field(..., description="Raw text content of the memory")
+    type: Literal["Entity", "Event", "Issue", "Fact", "Interaction", "Raw"] = Field(
+        default="Raw", 
+        description="Type of memory item"
+    )
+    created_at: Optional[datetime] = Field(None, description="Creation timestamp if available")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Parsed metadata from JSON content")
+    source: Optional[str] = Field(None, description="Source reference if available")
+    
+    @classmethod
+    def from_passage(cls, passage: Any) -> 'MemoryItem':
+        """
+        Create MemoryItem from Letta passage object.
+        
+        Args:
+            passage: Letta passage object with id, text, and optionally created_at
+            
+        Returns:
+            MemoryItem instance
+        """
+        import json
+        
+        # Extract basic fields
+        passage_id = passage.id if hasattr(passage, 'id') else str(uuid.uuid4())
+        text = passage.text if hasattr(passage, 'text') else str(passage)
+        created_at = passage.created_at if hasattr(passage, 'created_at') else None
+        
+        # Default values
+        memory_type = "Raw"
+        metadata = {}
+        source = None
+        
+        # Try to parse as JSON to extract structured data
+        if text.startswith('{') and text.endswith('}'):
+            try:
+                parsed_data = json.loads(text)
+                
+                # Extract type if present
+                if 'type' in parsed_data:
+                    # Capitalize first letter to match our Literal types
+                    raw_type = parsed_data['type']
+                    if isinstance(raw_type, str):
+                        # Handle common variations
+                        type_map = {
+                            'interaction': 'Interaction',
+                            'entity': 'Entity',
+                            'event': 'Event',
+                            'issue': 'Issue',
+                            'fact': 'Fact'
+                        }
+                        memory_type = type_map.get(raw_type.lower(), raw_type.capitalize())
+                        # Validate it's an allowed type
+                        if memory_type not in ["Entity", "Event", "Issue", "Fact", "Interaction", "Raw"]:
+                            memory_type = "Raw"
+                    else:
+                        memory_type = str(raw_type)
+                elif 'knowledge_type' in parsed_data:
+                    memory_type = parsed_data['knowledge_type']
+                
+                # Store all parsed data as metadata
+                metadata = parsed_data
+                
+                # Extract source if available
+                if 'source' in parsed_data:
+                    source = parsed_data['source']
+                elif 'doc_refs' in parsed_data and parsed_data['doc_refs']:
+                    # Format document references as source
+                    source = ', '.join([
+                        ref.get('doc', '') for ref in parsed_data['doc_refs'] 
+                        if isinstance(ref, dict) and 'doc' in ref
+                    ])
+                    
+            except (json.JSONDecodeError, TypeError):
+                # If JSON parsing fails, keep defaults
+                pass
+        
+        return cls(
+            id=passage_id,
+            text=text,
+            type=memory_type,
+            created_at=created_at,
+            metadata=metadata,
+            source=source
+        )
+    
+    class Config:
+        """Pydantic configuration."""
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }

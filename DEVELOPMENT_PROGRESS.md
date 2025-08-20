@@ -1,8 +1,8 @@
 # Letta Construction Claim Assistant - Development Progress
 
 **Project Start Date:** 2025-08-14  
-**Last Updated:** 2025-08-19  
-**Current Status:** 🎉 ALL 13 SPRINTS + LETTA SPRINTS L-R through L7 COMPLETE, L8 PARTIALLY COMPLETE (Polish done, Documentation pending)
+**Last Updated:** 2025-08-20  
+**Current Status:** 🎉 Memory Features Implementation Started - Sprint M1 Complete
 
 ---
 
@@ -34,6 +34,7 @@
 | **L6** | **Completed** | 2025-08-19 | 1.5h | **California domain optimization** |
 | **L7** | **Completed** | 2025-08-19 | 1.5h | **Testing & reliability** |
 | **L8** | **Partial** | 2025-08-19 | 0.5h/1h | **Polish complete, Documentation pending** |
+| **M1** | **Completed** | 2025-08-20 | 0.75h | **Memory Items List API** |
 
 ---
 
@@ -1420,6 +1421,56 @@ Beyond the current PoC scope, potential enhancements include:
 - `/api/matters/{matter_id}/memory/stats` - Memory statistics
 - `/api/letta/health` - Server and connection health
 - `/api/matters/{matter_id}/memory/summary` - Memory summary
+
+---
+
+## Memory Features Implementation (Started 2025-08-20)
+
+### Sprint M1: Memory Items List API (Completed 2025-08-20, 45 minutes)
+
+**Implementation Summary:**
+Created backend infrastructure to list and retrieve individual memory items from Letta's passages API, making agent memory transparent and accessible to users. This is the foundation for comprehensive memory management features.
+
+**Key Technical Decisions:**
+- Added smart type normalization to handle case variations (e.g., "interaction" → "Interaction")
+- Implemented metadata extraction from JSON-structured passages
+- Used Letta's passages.list() API with client-side filtering for pagination
+- Maintained backward compatibility with existing code
+
+**Components Added:**
+
+1. **MemoryItem Model** (`app/models.py`):
+   - Fields: id, text, type, created_at, metadata, source
+   - Smart `from_passage()` classmethod for conversion
+   - Handles both JSON-structured and raw text passages
+   - Extracts source from doc_refs when available
+
+2. **LettaAdapter Methods** (`app/letta_adapter.py`):
+   - `get_memory_items()` - List with pagination, filtering, and search
+   - `get_memory_item()` - Retrieve specific item by ID
+   - Full error handling and structured logging
+
+3. **API Endpoints** (`app/api.py`):
+   - `GET /api/matters/{id}/memory/items` - List all memory items
+   - `GET /api/matters/{id}/memory/items/{item_id}` - Get specific item
+   - Query parameters: limit, offset, type_filter, search_query
+
+**Testing Results:**
+- All unit tests passing (100% success)
+- API endpoints verified working
+- Pagination, filtering, and search functional
+- Memory isolation between matters confirmed
+
+**Issues Encountered:**
+- None - implementation went smoothly
+
+**Dependencies Added:**
+- None (uses existing Letta client and Pydantic)
+
+**Next Steps:**
+- Sprint M2 (Memory Viewer UI) ready to proceed
+- Backend infrastructure fully prepared for UI integration
+- Consider adding bulk operations in future sprints
 
 ---
 

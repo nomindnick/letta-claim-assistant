@@ -2271,6 +2271,143 @@ Return only the questions, one per line."""
             "Should we engage technical experts for further analysis?"
         ]
     
+    async def get_memory_items(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        type_filter: Optional[str] = None,
+        search_query: Optional[str] = None
+    ) -> List["MemoryItem"]:
+        """
+        Get memory items as structured objects with pagination and filtering.
+        
+        Args:
+            limit: Maximum number of items to return
+            offset: Number of items to skip for pagination
+            type_filter: Filter by memory type (Entity, Event, Issue, Fact, Interaction, Raw)
+            search_query: Search query to filter memories
+            
+        Returns:
+            List of MemoryItem objects
+        """
+        from .models import MemoryItem
+        
+        if not await self._ensure_initialized():
+            logger.warning("Cannot get memory items - adapter in fallback mode")
+            return []
+        
+        try:
+            # Fetch passages from Letta
+            # Note: Letta API doesn't support offset directly, so we fetch more and slice
+            fetch_limit = limit + offset if offset > 0 else limit
+            
+            passages = await self.client.agents.passages.list(
+                agent_id=self.agent_id,
+                search=search_query,
+                limit=fetch_limit
+            )
+            
+            if not passages:
+                return []
+            
+            # Convert passages to MemoryItem objects
+            memory_items = []
+            for passage in passages:
+                try:
+                    item = MemoryItem.from_passage(passage)
+                    
+                    # Apply type filter if specified
+                    if type_filter and item.type != type_filter:
+                        continue
+                    
+                    memory_items.append(item)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to parse passage as MemoryItem",
+                        passage_id=getattr(passage, 'id', 'unknown'),
+                        error=str(e)
+                    )
+            
+            # Apply offset and limit
+            if offset > 0:
+                memory_items = memory_items[offset:]
+            if len(memory_items) > limit:
+                memory_items = memory_items[:limit]
+            
+            logger.info(
+                "Retrieved memory items",
+                total_fetched=len(passages) if passages else 0,
+                filtered_count=len(memory_items),
+                type_filter=type_filter,
+                has_search=bool(search_query)
+            )
+            
+            return memory_items
+            
+        except Exception as e:
+            logger.error(
+                "Failed to get memory items",
+                error=str(e),
+                matter_id=self.matter_id
+            )
+            return []
+    
+    async def get_memory_item(self, item_id: str) -> Optional["MemoryItem"]:
+        """
+        Get a specific memory item by ID.
+        
+        Args:
+            item_id: The passage ID to retrieve
+            
+        Returns:
+            MemoryItem if found, None otherwise
+        """
+        from .models import MemoryItem
+        
+        if not await self._ensure_initialized():
+            logger.warning("Cannot get memory item - adapter in fallback mode")
+            return None
+        
+        try:
+            # Letta doesn't have a direct get-by-id for passages,
+            # so we need to list all and filter
+            passages = await self.client.agents.passages.list(
+                agent_id=self.agent_id,
+                limit=10000  # Get all to find the specific one
+            )
+            
+            if not passages:
+                return None
+            
+            # Find the passage with matching ID
+            for passage in passages:
+                if hasattr(passage, 'id') and passage.id == item_id:
+                    try:
+                        return MemoryItem.from_passage(passage)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to parse passage as MemoryItem",
+                            passage_id=item_id,
+                            error=str(e)
+                        )
+                        return None
+            
+            logger.warning(
+                "Memory item not found",
+                item_id=item_id,
+                matter_id=self.matter_id
+            )
+            return None
+            
+        except Exception as e:
+            logger.error(
+                "Failed to get memory item",
+                item_id=item_id,
+                error=str(e),
+                matter_id=self.matter_id
+            )
+            return None
+    
     async def validate_california_claim(
         self,
         claim_type: str,
