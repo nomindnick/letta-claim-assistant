@@ -507,6 +507,75 @@ class APIClient:
             logger.error("Failed to get memory item", error=str(e))
             raise
     
+    async def create_memory_item(
+        self,
+        matter_id: str,
+        text: str,
+        type: str = "Raw",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Create a new memory item."""
+        session = await self._get_session()
+        try:
+            payload = {
+                "text": text,
+                "type": type
+            }
+            if metadata:
+                payload["metadata"] = metadata
+            
+            async with session.post(
+                f"{self.base_url}/api/matters/{matter_id}/memory/items",
+                json=payload
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to create memory item", error=str(e))
+            raise
+    
+    async def update_memory_item(
+        self,
+        matter_id: str,
+        item_id: str,
+        new_text: str,
+        preserve_type: bool = True
+    ) -> Dict[str, Any]:
+        """Update an existing memory item."""
+        session = await self._get_session()
+        try:
+            payload = {
+                "new_text": new_text,
+                "preserve_type": preserve_type
+            }
+            
+            async with session.put(
+                f"{self.base_url}/api/matters/{matter_id}/memory/items/{item_id}",
+                json=payload
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to update memory item", item_id=item_id, error=str(e))
+            raise
+    
+    async def delete_memory_item(
+        self,
+        matter_id: str,
+        item_id: str
+    ) -> Dict[str, Any]:
+        """Delete a memory item."""
+        session = await self._get_session()
+        try:
+            async with session.delete(
+                f"{self.base_url}/api/matters/{matter_id}/memory/items/{item_id}"
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to delete memory item", item_id=item_id, error=str(e))
+            raise
+    
     # Health Check
     async def health_check(self) -> bool:
         """Check if backend API is healthy."""

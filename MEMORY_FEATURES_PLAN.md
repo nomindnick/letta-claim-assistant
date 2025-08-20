@@ -7,15 +7,15 @@
 | **M1** | ✅ Complete | 2025-08-20 | Memory Items List API |
 | **M2** | ✅ Complete | 2025-08-20 | Memory Viewer UI |
 | **M3** | ✅ Complete | 2025-08-20 | Memory Edit API |
-| M4 | 🔜 Next | - | Memory Editor UI |
-| M5 | Pending | - | Chat Mode Infrastructure |
+| **M4** | ✅ Complete | 2025-08-20 | Memory Editor UI |
+| M5 | 🔜 Next | - | Chat Mode Infrastructure |
 | M6 | Pending | - | Chat Mode UI |
 | M7 | Pending | - | Natural Language Memory Management |
 | M8 | Pending | - | Memory Search and Analytics |
 | M9 | Pending | - | Memory Import/Export |
 | M10 | Pending | - | Performance and Polish |
 
-**Current Progress**: 3 of 10 sprints completed (30%)
+**Current Progress**: 4 of 10 sprints completed (40%)
 
 ## Overview
 
@@ -317,6 +317,26 @@ The codebase already provides strong foundation for these features:
 - Verify changes persist
 
 ### Rollback: Hide edit buttons; read-only viewer remains
+
+### ✅ COMPLETION NOTES (2025-08-20):
+- **Implementation Time**: ~3 hours
+- **Key Additions**:
+  - Added CRUD methods to API client for create, update, and delete operations
+  - Created comprehensive MemoryEditor dialog component with form validation
+  - Enhanced MemoryViewer with Edit Mode toggle and action buttons
+  - Implemented confirmation dialogs for destructive operations
+  - Added support for structured metadata (dates, actors, doc references)
+- **Features Implemented**:
+  - Edit Mode toggle button to show/hide editing controls
+  - Add Memory button for creating new items
+  - Edit/Delete buttons on each memory card (visible in edit mode)
+  - Memory type selector with descriptions
+  - Optional metadata fields based on memory type
+  - Form validation with error messages
+  - Loading states during save operations
+  - Auto-refresh after modifications
+- **Testing**: 7 of 9 memory edit tests pass, 5 of 8 viewer tests pass
+- **No Breaking Changes**: Existing read-only viewer continues to work normally
 
 ---
 

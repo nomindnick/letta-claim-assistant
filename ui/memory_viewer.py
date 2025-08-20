@@ -16,6 +16,7 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
 from app.logging_conf import get_logger
+from .memory_editor import MemoryEditor
 
 logger = get_logger(__name__)
 
@@ -36,6 +37,7 @@ class MemoryViewer:
         self.current_filter = None
         self.current_search = ""
         self.memory_items = []
+        self.edit_mode = False  # Track edit mode state
         
         # UI elements
         self.search_input = None
@@ -44,6 +46,11 @@ class MemoryViewer:
         self.pagination_container = None
         self.loading_indicator = None
         self.empty_state = None
+        self.edit_mode_button = None
+        self.add_memory_button = None
+        
+        # Memory editor
+        self.memory_editor = None
         
         # Type configuration
         self.memory_types = {
@@ -72,8 +79,23 @@ class MemoryViewer:
             with ui.card().classes('w-full max-w-6xl h-5/6 overflow-hidden'):
                 # Header
                 with ui.row().classes('w-full justify-between items-center mb-4'):
-                    ui.label('Memory Items').classes('text-xl font-bold')
-                    ui.button(icon='close', on_click=self.dialog.close).props('flat round')
+                    with ui.row().classes('items-center gap-2'):
+                        ui.label('Memory Items').classes('text-xl font-bold')
+                        # Add memory button (visible in edit mode)
+                        self.add_memory_button = ui.button(
+                            'Add Memory',
+                            icon='add',
+                            on_click=self._show_create_dialog
+                        ).props('color=primary').classes('hidden')
+                    
+                    with ui.row().classes('items-center gap-2'):
+                        # Edit mode toggle
+                        self.edit_mode_button = ui.button(
+                            'Edit Mode',
+                            icon='edit',
+                            on_click=self._toggle_edit_mode
+                        ).props('outline')
+                        ui.button(icon='close', on_click=self.dialog.close).props('flat round')
                 
                 # Search bar
                 with ui.row().classes('w-full mb-4'):
@@ -213,7 +235,10 @@ class MemoryViewer:
             try:
                 with self.items_container:
                     for item in self.memory_items:
-                        self._create_memory_card(item)
+                        card = self._create_memory_card(item)
+                        # Apply edit mode visibility if in edit mode
+                        if self.edit_mode and hasattr(card, 'action_container'):
+                            card.action_container.classes(remove='hidden')
             except TypeError:
                 # Handle case where items_container is mocked in tests
                 pass
@@ -221,6 +246,7 @@ class MemoryViewer:
     def _create_memory_card(self, item: Dict[str, Any]) -> ui.element:
         """Create a card for a memory item."""
         memory_type = item.get('type', 'Raw')
+        item_id = item.get('id', 'unknown')
         
         # Handle case variations - normalize to our expected format
         if memory_type and isinstance(memory_type, str):
@@ -243,16 +269,40 @@ class MemoryViewer:
             with ui.column().classes('w-full gap-2'):
                 # Header with type badge and timestamp
                 with ui.row().classes('w-full justify-between items-start'):
-                    # Type badge
-                    with ui.row().classes(f'items-center gap-1 px-2 py-1 rounded-full bg-{type_config["color"]}-100 text-{type_config["color"]}-700 text-xs'):
-                        ui.icon(type_config["icon"]).classes('text-sm')
-                        ui.label(memory_type).classes('font-medium')
+                    # Left side: type badge
+                    with ui.row().classes('items-start gap-2 flex-grow'):
+                        # Type badge
+                        with ui.row().classes(f'items-center gap-1 px-2 py-1 rounded-full bg-{type_config["color"]}-100 text-{type_config["color"]}-700 text-xs'):
+                            ui.icon(type_config["icon"]).classes('text-sm')
+                            ui.label(memory_type).classes('font-medium')
                     
-                    # Timestamp
-                    created_at = item.get('created_at')
-                    if created_at:
-                        timestamp = self._format_timestamp(created_at)
-                        ui.label(timestamp).classes('text-xs text-gray-500')
+                    # Right side: timestamp and action buttons
+                    with ui.row().classes('items-center gap-2'):
+                        # Action buttons (only visible in edit mode)
+                        action_container = ui.row().classes('gap-1 hidden')
+                        with action_container:
+                            # Edit button
+                            edit_btn = ui.button(
+                                icon='edit',
+                                on_click=lambda it=item: asyncio.create_task(self._show_edit_dialog(it))
+                            ).props('flat round size=sm color=primary')
+                            edit_btn.tooltip('Edit memory')
+                            
+                            # Delete button
+                            delete_btn = ui.button(
+                                icon='delete',
+                                on_click=lambda it=item: asyncio.create_task(self._show_delete_confirmation(it))
+                            ).props('flat round size=sm color=negative')
+                            delete_btn.tooltip('Delete memory')
+                        
+                        # Store reference to action container for edit mode toggling
+                        card.action_container = action_container
+                        
+                        # Timestamp
+                        created_at = item.get('created_at')
+                        if created_at:
+                            timestamp = self._format_timestamp(created_at)
+                            ui.label(timestamp).classes('text-xs text-gray-500')
                 
                 # Content
                 text = item.get('text', '')
@@ -452,4 +502,142 @@ class MemoryViewer:
         logger.info(f"Filtering by type: {type_filter}")
         self.current_filter = type_filter
         self.current_page = 0  # Reset to first page
+        await self._load_memory_items()
+    
+    def _toggle_edit_mode(self):
+        """Toggle edit mode on/off."""
+        self.edit_mode = not self.edit_mode
+        
+        # Update button appearance
+        if self.edit_mode_button:
+            if self.edit_mode:
+                self.edit_mode_button.props('color=primary')
+                self.edit_mode_button.text = 'Exit Edit'
+            else:
+                self.edit_mode_button.props(remove='color=primary')
+                self.edit_mode_button.props('outline')
+                self.edit_mode_button.text = 'Edit Mode'
+        
+        # Show/hide add memory button
+        if self.add_memory_button:
+            if self.edit_mode:
+                self.add_memory_button.classes(remove='hidden')
+            else:
+                self.add_memory_button.classes(add='hidden')
+        
+        # Show/hide action buttons on all cards
+        if self.items_container:
+            # Find all cards and toggle their action containers
+            for element in self.items_container.children:
+                if hasattr(element, 'action_container'):
+                    if self.edit_mode:
+                        element.action_container.classes(remove='hidden')
+                    else:
+                        element.action_container.classes(add='hidden')
+    
+    async def _show_create_dialog(self):
+        """Show the memory editor dialog in create mode."""
+        if not self.memory_editor:
+            self.memory_editor = MemoryEditor(api_client=self.api_client)
+        
+        await self.memory_editor.show_create(
+            matter_id=self.current_matter_id,
+            on_save=self._on_memory_saved
+        )
+    
+    async def _show_edit_dialog(self, item: Dict[str, Any]):
+        """Show the memory editor dialog in edit mode."""
+        if not self.memory_editor:
+            self.memory_editor = MemoryEditor(api_client=self.api_client)
+        
+        await self.memory_editor.show_edit(
+            matter_id=self.current_matter_id,
+            item=item,
+            on_save=self._on_memory_saved
+        )
+    
+    async def _show_delete_confirmation(self, item: Dict[str, Any]):
+        """Show confirmation dialog before deleting a memory item."""
+        item_id = item.get('id', 'unknown')
+        item_type = item.get('type', 'Unknown')
+        
+        # Get item preview text
+        preview_text = ""
+        metadata = item.get('metadata', {})
+        if metadata and isinstance(metadata, dict):
+            preview_text = metadata.get('label', '')
+        if not preview_text:
+            preview_text = item.get('text', '')[:100]
+            if len(item.get('text', '')) > 100:
+                preview_text += '...'
+        
+        # Create confirmation dialog
+        confirm_dialog = None
+        with ui.dialog() as confirm_dialog:
+            with ui.card().classes('w-96'):
+                # Header
+                with ui.row().classes('w-full items-center gap-2 mb-4'):
+                    ui.icon('warning').classes('text-2xl text-orange-500')
+                    ui.label('Delete Memory Item?').classes('text-lg font-bold')
+                
+                # Content
+                with ui.column().classes('w-full gap-2 mb-4'):
+                    ui.label('This action cannot be undone.').classes('text-sm text-gray-600')
+                    
+                    # Item preview
+                    with ui.card().classes('w-full bg-gray-50 p-3'):
+                        with ui.row().classes('items-center gap-2 mb-2'):
+                            ui.label(f'Type: {item_type}').classes('text-xs font-medium')
+                            ui.label(f'ID: {item_id[:8]}...').classes('text-xs text-gray-500')
+                        ui.label(preview_text).classes('text-sm text-gray-700')
+                
+                # Action buttons
+                with ui.row().classes('w-full justify-end gap-2'):
+                    ui.button(
+                        'Cancel',
+                        on_click=confirm_dialog.close
+                    ).props('flat')
+                    
+                    async def confirm_delete():
+                        await self._delete_memory_item(item_id)
+                        confirm_dialog.close()
+                    
+                    ui.button(
+                        'Delete',
+                        icon='delete',
+                        on_click=confirm_delete
+                    ).props('color=negative')
+        
+        confirm_dialog.open()
+    
+    async def _delete_memory_item(self, item_id: str):
+        """Delete a memory item."""
+        if not self.api_client or not self.current_matter_id:
+            ui.notify("Cannot delete: API client or matter not configured", type="negative")
+            return
+        
+        try:
+            # Show loading notification
+            ui.notify('Deleting memory item...', type='ongoing', position='bottom-right')
+            
+            # Call API to delete
+            result = await self.api_client.delete_memory_item(
+                matter_id=self.current_matter_id,
+                item_id=item_id
+            )
+            
+            if result.get('success'):
+                ui.notify('Memory item deleted successfully', type='positive')
+                # Reload the list
+                await self._load_memory_items()
+            else:
+                ui.notify(f"Failed to delete: {result.get('message', 'Unknown error')}", type='negative')
+        
+        except Exception as e:
+            logger.error(f"Failed to delete memory item: {e}")
+            ui.notify(f"Error deleting memory: {str(e)}", type='negative')
+    
+    async def _on_memory_saved(self):
+        """Callback when a memory item is saved (created or updated)."""
+        # Reload the memory items to show the changes
         await self._load_memory_items()
