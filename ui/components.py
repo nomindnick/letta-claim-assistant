@@ -48,6 +48,27 @@ class SkeletonLoader:
                     with ui.card_section():
                         ui.skeleton().classes('h-4 w-3/4 mb-2')
                         ui.skeleton().classes('h-3 w-1/2 mb-1')
+        return skeleton
+    
+    @staticmethod
+    def memory_card_skeleton() -> ui.element:
+        """Skeleton for memory card."""
+        with ui.card().classes('w-full animate-pulse') as skeleton:
+            with ui.column().classes('w-full gap-2 p-4'):
+                # Header skeleton
+                with ui.row().classes('w-full justify-between items-start'):
+                    ui.skeleton().classes('h-6 w-20 rounded')  # Type badge
+                    ui.skeleton().classes('h-4 w-32')  # Timestamp
+                
+                # Content skeleton
+                ui.skeleton().classes('h-4 w-full mt-2')
+                ui.skeleton().classes('h-4 w-5/6')
+                ui.skeleton().classes('h-4 w-4/6')
+                
+                # Footer skeleton
+                with ui.row().classes('w-full justify-between items-center mt-4'):
+                    ui.skeleton().classes('h-3 w-24')  # Source
+                    ui.skeleton().classes('h-8 w-20 rounded')  # Action button
                         ui.skeleton().classes('h-3 w-1/4')
         return skeleton
     

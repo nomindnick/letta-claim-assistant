@@ -11,6 +11,8 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+import time
+import random
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -23,6 +25,10 @@ class APIClient:
     """Async HTTP client for backend API."""
     
     def __init__(self, base_url: str = None):
+        # Retry configuration
+        self.max_retries = 3
+        self.retry_delay = 1.0  # Base delay in seconds
+        
         if base_url is None:
             # Check if backend port was dynamically assigned
             import os
@@ -43,6 +49,59 @@ class APIClient:
         """Close HTTP session."""
         if self.session and not self.session.closed:
             await self.session.close()
+    
+    async def _retry_request(self, request_func, *args, **kwargs):
+        """Execute request with retry logic."""
+        last_error = None
+        
+        for attempt in range(self.max_retries):
+            try:
+                return await request_func(*args, **kwargs)
+            except aiohttp.ClientConnectionError as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        f"Connection error, retrying in {delay:.2f}s",
+                        attempt=attempt + 1,
+                        max_retries=self.max_retries,
+                        error=str(e)
+                    )
+                    await asyncio.sleep(delay)
+            except aiohttp.ClientResponseError as e:
+                # Don't retry on 4xx errors (client errors)
+                if 400 <= e.status < 500:
+                    raise
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        f"Server error {e.status}, retrying in {delay:.2f}s",
+                        attempt=attempt + 1,
+                        max_retries=self.max_retries
+                    )
+                    await asyncio.sleep(delay)
+            except asyncio.TimeoutError as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        f"Request timeout, retrying in {delay:.2f}s",
+                        attempt=attempt + 1,
+                        max_retries=self.max_retries
+                    )
+                    await asyncio.sleep(delay)
+            except Exception as e:
+                # For unexpected errors, log and re-raise
+                logger.error(f"Unexpected error in request: {e}")
+                raise
+        
+        # All retries exhausted
+        logger.error(
+            f"All {self.max_retries} retries failed",
+            last_error=str(last_error)
+        )
+        raise last_error
     
     async def post(self, endpoint: str, json_data: Dict[str, Any] = None, data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generic POST request method. By default sends JSON data."""
@@ -488,8 +547,9 @@ class APIClient:
         search_type: Optional[str] = "semantic"
     ) -> Dict[str, Any]:
         """Get memory items for a matter with pagination and filtering."""
-        session = await self._get_session()
-        try:
+        
+        async def _make_request():
+            session = await self._get_session()
             params = {
                 "limit": limit,
                 "offset": offset,
@@ -506,8 +566,12 @@ class APIClient:
             ) as response:
                 response.raise_for_status()
                 return await response.json()
+        
+        # Use retry wrapper for resilient requests
+        try:
+            return await self._retry_request(_make_request)
         except Exception as e:
-            logger.error("Failed to get memory items", error=str(e))
+            logger.error("Failed to get memory items after retries", error=str(e))
             raise
     
     async def get_memory_item(self, matter_id: str, item_id: str) -> Dict[str, Any]:

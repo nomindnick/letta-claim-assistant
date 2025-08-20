@@ -18,6 +18,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from app.logging_conf import get_logger
 from .memory_editor import MemoryEditor
 from .memory_analytics import MemoryAnalyticsDashboard
+from .memory_help import memory_help
 
 logger = get_logger(__name__)
 
@@ -40,6 +41,15 @@ class MemoryViewer:
         self.memory_items = []
         self.edit_mode = False  # Track edit mode state
         
+        # Lazy loading state
+        self.is_loading_more = False
+        self.has_more_items = True
+        self.all_loaded_items = []  # Store all loaded items for virtual scrolling
+        
+        # Debounce timer for search
+        self.search_timer = None
+        self.search_debounce_ms = 300
+        
         # UI elements
         self.search_input = None
         self.type_tabs = None
@@ -48,6 +58,8 @@ class MemoryViewer:
         self.loading_indicator = None
         self.empty_state = None
         self.edit_mode_button = None
+        self.load_more_indicator = None
+        self.scroll_area = None
         self.add_memory_button = None
         
         # Memory editor
@@ -75,11 +87,11 @@ class MemoryViewer:
         self.current_filter = None
         self.current_search = ""
         
-        # Create dialog
+        # Create responsive dialog
         with ui.dialog() as self.dialog:
-            with ui.card().classes('w-full max-w-6xl h-5/6 overflow-hidden'):
-                # Header
-                with ui.row().classes('w-full justify-between items-center mb-4'):
+            with ui.card().classes('w-full max-w-6xl h-5/6 overflow-hidden lg:max-w-5xl md:max-w-3xl sm:max-w-full sm:h-full'):
+                # Header with responsive layout
+                with ui.row().classes('w-full justify-between items-center mb-4 flex-wrap sm:flex-col sm:items-start sm:gap-2'):
                     with ui.row().classes('items-center gap-2'):
                         ui.label('Memory Items').classes('text-xl font-bold')
                         # Add memory button (visible in edit mode)
@@ -116,7 +128,7 @@ class MemoryViewer:
                     self.search_input = ui.input(
                         placeholder='Search memories...',
                         on_change=self._on_search_change
-                    ).props('outlined clearable').classes('flex-grow')
+                    ).props('outlined clearable').classes('flex-grow min-w-0 sm:w-full')
                     self.search_input.on('keydown.enter', self._perform_search)
                     
                     ui.button(
@@ -148,10 +160,14 @@ class MemoryViewer:
                         else:
                             tab.on('click', make_filter_handler(None))
                 
-                # Content area - single container for all filtered results
-                with ui.scroll_area().classes('w-full h-96 flex-grow'):
+                # Content area - single container for all filtered results with infinite scroll
+                self.scroll_area = ui.scroll_area().classes('w-full h-96 flex-grow')
+                with self.scroll_area:
                     # Main container for all items (shared across all tabs)
                     self.items_container = ui.column().classes('w-full gap-3 p-2')
+                    
+                    # Set up infinite scroll detection
+                    self.scroll_area.on('scroll', self._on_scroll)
                     
                     # Loading indicator
                     self.loading_indicator = ui.column().classes('w-full items-center py-8 hidden')
@@ -165,14 +181,52 @@ class MemoryViewer:
                         ui.icon('psychology', size='4rem').classes('text-gray-300')
                         ui.label('No memory items found').classes('text-lg text-gray-500 mt-4')
                         ui.label('The agent hasn\'t learned anything yet').classes('text-sm text-gray-400')
+                    
+                    # Load more indicator for infinite scroll
+                    self.load_more_indicator = ui.column().classes('w-full items-center py-4 hidden')
+                    with self.load_more_indicator:
+                        ui.spinner(size='md', color='purple')
+                        ui.label('Loading more...').classes('text-sm text-gray-600')
                 
                 # Pagination controls
                 self.pagination_container = ui.row().classes('w-full justify-between items-center mt-4 pt-4 border-t')
                 self._create_pagination_controls()
         
+        # Setup keyboard shortcuts
+        self._setup_keyboard_shortcuts()
+        
         # Open dialog and load initial data
         self.dialog.open()
         await self._load_memory_items()
+    
+    def _setup_keyboard_shortcuts(self):
+        """Setup keyboard shortcuts for the memory viewer."""
+        if not self.dialog:
+            return
+        
+        # Ctrl+F / Cmd+F: Focus search
+        self.dialog.on('keydown.ctrl.f', lambda: self._focus_search())
+        self.dialog.on('keydown.meta.f', lambda: self._focus_search())  # Mac
+        
+        # Ctrl+E: Toggle edit mode
+        self.dialog.on('keydown.ctrl.e', lambda: self._toggle_edit_mode() if self.edit_mode_button else None)
+        
+        # Ctrl+N: Add new memory
+        self.dialog.on('keydown.ctrl.n', lambda: asyncio.create_task(self._add_memory()) if self.add_memory_button else None)
+        
+        # Escape: Close dialog
+        self.dialog.on('keydown.escape', lambda: self.dialog.close())
+        
+        # Arrow keys for navigation (when not in input)
+        self.dialog.on('keydown.arrowleft', lambda: asyncio.create_task(self._previous_page()))
+        self.dialog.on('keydown.arrowright', lambda: asyncio.create_task(self._next_page()))
+    
+    def _focus_search(self):
+        """Focus the search input field."""
+        if self.search_input:
+            self.search_input.focus()
+            # Prevent default browser search
+            return False
     
     def _create_pagination_controls(self):
         """Create pagination controls."""
@@ -272,7 +326,7 @@ class MemoryViewer:
                 pass
     
     def _create_memory_card(self, item: Dict[str, Any]) -> ui.element:
-        """Create a card for a memory item."""
+        """Create a responsive card for a memory item."""
         memory_type = item.get('type', 'Raw')
         item_id = item.get('id', 'unknown')
         
@@ -293,7 +347,7 @@ class MemoryViewer:
         
         type_config = self.memory_types.get(memory_type, self.memory_types['Raw'])
         
-        with ui.card().classes('w-full cursor-pointer hover:shadow-lg transition-shadow') as card:
+        with ui.card().classes('w-full cursor-pointer hover:shadow-lg transition-shadow touch-manipulation') as card:
             with ui.column().classes('w-full gap-2'):
                 # Header with type badge and timestamp
                 with ui.row().classes('w-full justify-between items-start'):
@@ -440,11 +494,16 @@ class MemoryViewer:
             return timestamp
     
     def _show_loading(self):
-        """Show loading indicator."""
+        """Show loading indicator with skeleton loaders."""
         if self.loading_indicator:
             self.loading_indicator.classes(remove='hidden')
         if self.items_container:
-            self.items_container.classes(add='hidden')
+            # Show skeleton loaders instead of hiding
+            self.items_container.clear()
+            with self.items_container:
+                from .components import SkeletonLoader
+                for _ in range(3):  # Show 3 skeleton cards
+                    SkeletonLoader.memory_card_skeleton()
         if self.empty_state:
             self.empty_state.classes(add='hidden')
     
@@ -519,6 +578,24 @@ class MemoryViewer:
     def _on_search_change(self, e):
         """Handle search input change."""
         self.current_search = e.value
+        # Trigger debounced search
+        asyncio.create_task(self._on_search_change_debounced(e.value))
+    
+    async def _on_search_change_debounced(self, value: str):
+        """Debounced search handler."""
+        # Cancel previous timer
+        if self.search_timer:
+            self.search_timer.cancel()
+        
+        # Start new timer
+        async def perform_search():
+            await asyncio.sleep(self.search_debounce_ms / 1000)
+            self.current_search = value
+            self.current_page = 0  # Reset to first page
+            self.all_loaded_items = []  # Clear cache for new search
+            await self._load_memory_items()
+        
+        self.search_timer = asyncio.create_task(perform_search())
     
     async def _perform_search(self):
         """Perform search with current query."""
@@ -530,7 +607,81 @@ class MemoryViewer:
         logger.info(f"Filtering by type: {type_filter}")
         self.current_filter = type_filter
         self.current_page = 0  # Reset to first page
+        self.all_loaded_items = []  # Clear cache for new filter
+        self.has_more_items = True  # Reset infinite scroll state
         await self._load_memory_items()
+    
+    async def _on_scroll(self, e):
+        """Handle scroll event for infinite scrolling."""
+        if not self.scroll_area or self.is_loading_more or not self.has_more_items:
+            return
+        
+        # Check if scrolled near bottom (within 100px)
+        try:
+            scroll_height = e.args.get('scrollHeight', 0)
+            scroll_top = e.args.get('scrollTop', 0)
+            client_height = e.args.get('clientHeight', 0)
+            
+            if scroll_height - scroll_top - client_height < 100:
+                await self._load_more_items()
+        except Exception as e:
+            logger.debug(f"Scroll detection error: {e}")
+    
+    async def _load_more_items(self):
+        """Load more items for infinite scroll."""
+        if self.is_loading_more or not self.has_more_items:
+            return
+        
+        self.is_loading_more = True
+        
+        # Show load more indicator
+        if self.load_more_indicator:
+            self.load_more_indicator.classes(remove='hidden')
+        
+        try:
+            # Increment page for next batch
+            self.current_page += 1
+            offset = self.current_page * self.items_per_page
+            
+            # Get search type from UI selector
+            search_type = "semantic"
+            if hasattr(self, 'search_type') and self.search_type:
+                search_type = self.search_type.value.lower()
+            
+            # Fetch more items
+            result = await self.api_client.get_memory_items(
+                matter_id=self.current_matter_id,
+                limit=self.items_per_page,
+                offset=offset,
+                type_filter=self.current_filter,
+                search_query=self.current_search if self.current_search else None,
+                search_type=search_type
+            )
+            
+            new_items = result.get('items', [])
+            
+            if new_items:
+                # Add to all loaded items
+                self.all_loaded_items.extend(new_items)
+                
+                # Render new items
+                if self.items_container:
+                    with self.items_container:
+                        for item in new_items:
+                            card = self._create_memory_card(item)
+                            if self.edit_mode and hasattr(card, 'action_container'):
+                                card.action_container.classes(remove='hidden')
+            else:
+                # No more items to load
+                self.has_more_items = False
+            
+        except Exception as e:
+            logger.error(f"Failed to load more items: {e}")
+            self.has_more_items = False
+        finally:
+            self.is_loading_more = False
+            if self.load_more_indicator:
+                self.load_more_indicator.classes(add='hidden')
     
     def _toggle_edit_mode(self):
         """Toggle edit mode on/off."""

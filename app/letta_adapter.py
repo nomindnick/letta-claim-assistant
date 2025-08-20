@@ -15,7 +15,14 @@ import uuid
 from datetime import datetime, timedelta
 import hashlib
 from collections import defaultdict, Counter
-import pkg_resources
+from functools import lru_cache
+import time
+
+try:
+    import pkg_resources
+except ImportError:
+    # Handle newer Python versions that don't include pkg_resources
+    pkg_resources = None
 
 try:
     from letta_client import AsyncLetta, Letta
@@ -27,8 +34,12 @@ try:
     )
     # Get Letta version for compatibility checking
     try:
-        LETTA_VERSION = pkg_resources.get_distribution("letta").version
-        LETTA_CLIENT_VERSION = pkg_resources.get_distribution("letta-client").version
+        if pkg_resources:
+            LETTA_VERSION = pkg_resources.get_distribution("letta").version
+            LETTA_CLIENT_VERSION = pkg_resources.get_distribution("letta-client").version
+        else:
+            LETTA_VERSION = "unknown"
+            LETTA_CLIENT_VERSION = "unknown"
     except:
         LETTA_VERSION = "unknown"
         LETTA_CLIENT_VERSION = "unknown"
@@ -52,6 +63,7 @@ from .letta_cost_tracker import cost_tracker
 from .extractors.california_extractor import california_extractor
 from .followup_templates_california import california_followup_templates
 from .validators.california_validator import california_validator
+from .performance_monitor import performance_monitor, track_performance
 
 logger = get_logger(__name__)
 
@@ -79,6 +91,14 @@ class LettaAdapter:
         # Initialize client and agent asynchronously
         # This will be called when first operation is attempted
         self._initialized = False
+        
+        # Enhanced caching system
+        self._memory_cache = {}  # Cache for memory items
+        self._cache_ttl = 300  # 5 minutes default TTL
+        self._cache_timestamps = {}  # Track cache creation times
+        self._cache_size_limit = 100  # Maximum cache entries
+        self._search_cache = {}  # Separate cache for search results
+        self._pending_cache_refresh = False  # Flag for cache refresh
         
         logger.info(
             "LettaAdapter created (pending initialization)",
@@ -2368,6 +2388,83 @@ Provide a comprehensive answer based on what you remember about this matter. If 
             return [term.strip() for term in query.split(" OR ")]
         return [query]
     
+    def _get_cache_key(self, **kwargs) -> str:
+        """Generate a cache key from parameters."""
+        # Sort kwargs for consistent keys
+        sorted_items = sorted(kwargs.items())
+        key_str = json.dumps(sorted_items, default=str)
+        return hashlib.md5(key_str.encode()).hexdigest()
+    
+    def _is_cache_valid(self, key: str) -> bool:
+        """Check if cache entry is still valid."""
+        if key not in self._cache_timestamps:
+            return False
+        
+        age = time.time() - self._cache_timestamps[key]
+        return age < self._cache_ttl
+    
+    def _get_from_cache(self, key: str) -> Optional[Any]:
+        """Get item from cache if valid."""
+        if key in self._memory_cache and self._is_cache_valid(key):
+            logger.debug("Cache hit", key=key[:8])
+            performance_monitor.record_cache_hit()
+            return self._memory_cache[key]
+        performance_monitor.record_cache_miss()
+        return None
+    
+    def _set_cache(self, key: str, value: Any) -> None:
+        """Set cache entry with TTL tracking."""
+        # Enforce cache size limit
+        if len(self._memory_cache) >= self._cache_size_limit:
+            # Remove oldest entries
+            oldest_keys = sorted(
+                self._cache_timestamps.keys(),
+                key=lambda k: self._cache_timestamps[k]
+            )[:10]  # Remove 10 oldest
+            for old_key in oldest_keys:
+                self._memory_cache.pop(old_key, None)
+                self._cache_timestamps.pop(old_key, None)
+                performance_monitor.record_cache_eviction()
+        
+        self._memory_cache[key] = value
+        self._cache_timestamps[key] = time.time()
+        logger.debug("Cache set", key=key[:8])
+    
+    def _invalidate_cache(self, pattern: Optional[str] = None) -> None:
+        """Invalidate cache entries, optionally matching a pattern."""
+        if pattern:
+            # Invalidate entries matching pattern
+            keys_to_remove = [
+                k for k in self._memory_cache.keys()
+                if pattern in k
+            ]
+            for key in keys_to_remove:
+                self._memory_cache.pop(key, None)
+                self._cache_timestamps.pop(key, None)
+            logger.debug("Cache invalidated", pattern=pattern, removed=len(keys_to_remove))
+        else:
+            # Clear all cache
+            self._memory_cache.clear()
+            self._cache_timestamps.clear()
+            self._search_cache.clear()
+            logger.debug("Cache cleared")
+    
+    async def warm_cache(self) -> None:
+        """Pre-warm cache with common queries."""
+        if not await self._ensure_initialized():
+            return
+        
+        try:
+            # Pre-fetch first page of memories
+            await self.get_memory_items(limit=20, offset=0)
+            
+            # Pre-fetch memory stats
+            await self.get_memory_stats()
+            
+            logger.info("Cache warmed successfully")
+        except Exception as e:
+            logger.error("Cache warming failed", error=str(e))
+    
     def _fallback_followups(self) -> List[str]:
         """Fallback follow-up suggestions when Letta is unavailable."""
         return [
@@ -2377,6 +2474,7 @@ Provide a comprehensive answer based on what you remember about this matter. If 
             "Should we engage technical experts for further analysis?"
         ]
     
+    @track_performance("get_memory_items")
     async def get_memory_items(
         self,
         limit: int = 50,
@@ -2402,6 +2500,21 @@ Provide a comprehensive answer based on what you remember about this matter. If 
         if not await self._ensure_initialized():
             logger.warning("Cannot get memory items - adapter in fallback mode")
             return []
+        
+        # Generate cache key
+        cache_key = self._get_cache_key(
+            operation="get_memory_items",
+            limit=limit,
+            offset=offset,
+            type_filter=type_filter,
+            search_query=search_query,
+            search_type=search_type
+        )
+        
+        # Check cache first
+        cached_result = self._get_from_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
         
         try:
             # If search query is provided with specific search type, use search_memories
@@ -2429,6 +2542,7 @@ Provide a comprehensive answer based on what you remember about this matter. If 
                 )
                 
                 if not passages:
+                    self._set_cache(cache_key, [])
                     return []
                 
                 # Convert passages to MemoryItem objects
@@ -2454,6 +2568,9 @@ Provide a comprehensive answer based on what you remember about this matter. If 
             # Apply offset and limit to the filtered results
             memory_items = all_memory_items[offset:offset + limit]
             
+            # Cache the result
+            self._set_cache(cache_key, memory_items)
+            
             # For logging, determine how many items were fetched
             total_fetched = len(all_memory_items) if all_memory_items else 0
             
@@ -2462,7 +2579,8 @@ Provide a comprehensive answer based on what you remember about this matter. If 
                 total_fetched=total_fetched,
                 filtered_count=len(memory_items),
                 type_filter=type_filter,
-                has_search=bool(search_query)
+                has_search=bool(search_query),
+                from_cache=False
             )
             
             return memory_items
@@ -2594,6 +2712,9 @@ Provide a comprehensive answer based on what you remember about this matter. If 
                 item_type=type,
                 content_preview=text[:100]
             )
+            
+            # Invalidate cache since we added new memory
+            self._invalidate_cache()
             
             return passage.id
             
