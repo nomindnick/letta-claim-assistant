@@ -31,6 +31,7 @@ from ui.memory_components import (
     MemoryStatusBadge, MemoryStatsDashboard, AgentHealthIndicator,
     MemoryOperationToast, MemoryContextTooltip
 )
+from ui.chat_components import ChatModeSelector, ChatModeIndicator
 from ui.performance import (
     chat_debouncer, search_debouncer, response_cache,
     lazy_loader, with_loading_state, measure_performance
@@ -51,6 +52,7 @@ class LettaClaimUI:
         self.upload_jobs: Dict[str, Dict] = {}  # Track upload jobs
         self.chat_history: List[Dict[str, Any]] = []  # Chat message history
         self.current_sources: List[Dict[str, Any]] = []  # Current sources for display
+        self.current_chat_mode: str = "combined"  # Current chat mode
         
         # UI component references
         self.matter_selector = None
@@ -73,6 +75,12 @@ class LettaClaimUI:
         self.memory_dashboard = MemoryStatsDashboard(api_client=self.api_client)
         self.agent_health = AgentHealthIndicator()
         self.memory_stats_timer = None
+        
+        # Chat mode selector
+        self.chat_mode_selector = ChatModeSelector(
+            default_mode="combined",
+            on_change=self._on_chat_mode_changed
+        )
         
         # UI state
         self.is_processing = False
@@ -221,6 +229,19 @@ class LettaClaimUI:
             # Could implement cancellation logic here
             pass
     
+    def _on_chat_mode_changed(self, mode: str):
+        """Handle chat mode change."""
+        self.current_chat_mode = mode
+        logger.info(f"Chat mode changed to: {mode}")
+        
+        # Update UI to reflect mode change
+        if mode == "memory":
+            self.memory_badge.show_active("Memory Mode")
+        elif mode == "rag":
+            self.memory_badge.hide()
+        else:
+            self.memory_badge.show_enhanced()
+    
     async def _check_backend_connection(self):
         """Check if backend API is available."""
         try:
@@ -331,6 +352,9 @@ class LettaClaimUI:
                         icon='settings',
                         on_click=self._toggle_settings_drawer
                     ).props('flat round')
+            
+            # Chat mode selector
+            self.chat_mode_selector.create()
             
             # Chat messages area
             with ui.card().classes('w-full flex-1 mb-4'):
@@ -901,7 +925,8 @@ class LettaClaimUI:
             "timestamp": datetime.now().isoformat(),
             "sources": [],
             "followups": [],
-            "used_memory": []
+            "used_memory": [],
+            "mode": self.current_chat_mode  # Track mode used for this message
         }
         self.chat_history.append(user_message)
         
@@ -909,23 +934,38 @@ class LettaClaimUI:
         with self.chat_messages:
             await self._add_message_to_display(user_message)
         
-        # Show memory status - recalling
-        self.memory_badge.show_active("Recalling Memory")
-        MemoryOperationToast.show_recalling()
+        # Show mode-specific status
+        if self.current_chat_mode == "memory":
+            self.memory_badge.show_active("Memory Mode Active")
+            MemoryOperationToast.show_info("Querying agent memory only")
+        elif self.current_chat_mode == "rag":
+            self.memory_badge.hide()
+            MemoryOperationToast.show_info("Searching documents only")
+        else:
+            self.memory_badge.show_active("Recalling Memory")
+            MemoryOperationToast.show_recalling()
         
-        # Show thinking indicator
+        # Show mode-specific thinking indicator
         with self.chat_messages:
             thinking_card = ui.card().classes('w-full mb-2 bg-gray-50')
             with thinking_card:
                 with ui.row().classes('items-center'):
                     ui.spinner()
-                    ui.label('Thinking...').classes('ml-2')
+                    # Mode-specific thinking message
+                    if self.current_chat_mode == "memory":
+                        thinking_text = "Consulting agent memory..."
+                    elif self.current_chat_mode == "rag":
+                        thinking_text = "Searching documents..."
+                    else:
+                        thinking_text = "Searching documents and memory..."
+                    ui.label(thinking_text).classes('ml-2')
         
         try:
-            # Send to backend
+            # Send to backend with current chat mode
             response = await self.api_client.send_chat_message(
                 self.current_matter['id'],
-                query
+                query,
+                mode=self.current_chat_mode  # Pass the selected mode
             )
             
             # Remove thinking indicator
@@ -946,7 +986,8 @@ class LettaClaimUI:
                 "timestamp": datetime.now().isoformat(),
                 "sources": response.get('sources', []),
                 "followups": response.get('followups', []),
-                "used_memory": used_memory
+                "used_memory": used_memory,
+                "mode": self.current_chat_mode  # Track mode used for this response
             }
             self.chat_history.append(assistant_message)
             
@@ -1133,6 +1174,7 @@ class LettaClaimUI:
         timestamp = message.get("timestamp", "")
         sources = message.get("sources", [])
         followups = message.get("followups", [])
+        mode = message.get("mode", "combined")  # Get mode used for this message
         
         # Format timestamp
         from datetime import datetime
@@ -1162,7 +1204,12 @@ class LettaClaimUI:
             with ui.card().classes(card_classes):
                 with ui.column().classes('w-full'):
                     with ui.row().classes('w-full justify-between items-start'):
-                        ui.markdown(f"**Assistant:**\n\n{content}")
+                        with ui.column().classes('flex-1'):
+                            with ui.row().classes('items-center gap-2 mb-2'):
+                                ui.markdown("**Assistant:**")
+                                # Add mode indicator
+                                ChatModeIndicator.create(mode)
+                            ui.markdown(content)
                         if time_str:
                             ui.label(time_str).classes('text-xs text-gray-500')
                     

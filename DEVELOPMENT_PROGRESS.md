@@ -2,7 +2,7 @@
 
 **Project Start Date:** 2025-08-14  
 **Last Updated:** 2025-08-20  
-**Current Status:** 🚀 Memory Features Implementation Progressing - Sprint M3 Complete (30% of Memory Features)
+**Current Status:** 🚀 Memory Features Implementation Progressing - Sprint M6 Complete (60% of Memory Features)
 
 ---
 
@@ -37,6 +37,9 @@
 | **M1** | **Completed** | 2025-08-20 | 0.75h | **Memory Items List API** |
 | **M2** | **Completed** | 2025-08-20 | 2.5h | **Memory Viewer UI** |
 | **M3** | **Completed** | 2025-08-20 | 2.5h | **Memory Edit API** |
+| **M4** | **Completed** | 2025-08-20 | 3h | **Memory Editor UI** |
+| **M5** | **Completed** | 2025-08-20 | 2h | **Chat Mode Infrastructure** |
+| **M6** | **Completed** | 2025-08-20 | 2h | **Chat Mode UI** |
 
 ---
 
@@ -1664,6 +1667,63 @@ The Letta Construction Claim Assistant is a production-ready desktop application
 **Next Sprint Prep:**
 - Sprint M4 (Memory Editor UI) ready to proceed
 - API foundation complete for UI implementation
+
+---
+
+### Sprint M6: Chat Mode UI (Completed 2025-08-20, 2h)
+
+**Implementation Summary:**
+- Created comprehensive ChatModeSelector component with radio button interface
+- Added visual mode indicators with icons and colors for each mode
+- Integrated mode selector seamlessly into existing chat interface
+- Enhanced chat messages with mode-specific indicators
+
+**Key Technical Decisions:**
+- Used radio button group instead of dropdown for better visibility
+- Added descriptive tooltips and explanations for each mode
+- Implemented mode persistence during session
+- Created separate ChatModeIndicator for message display
+
+**Components Created:**
+- `ui/chat_components.py`: New file with ChatModeSelector and ChatModeIndicator classes
+- ChatMode enum matching backend values (rag, memory, combined)
+- ModeInfo dataclass for mode metadata (icon, color, description)
+
+**UI Enhancements:**
+- Mode selector card positioned above chat messages area
+- Real-time mode switching with instant feedback
+- Mode-specific thinking messages ("Searching documents..." vs "Consulting memory...")
+- Visual indicators on assistant responses showing which mode was used
+- Mode-aware memory badge behavior
+
+**Integration Points:**
+- Updated APIClient.send_chat_message() to include mode parameter
+- Modified LettaClaimUI to track current_chat_mode state
+- Added _on_chat_mode_changed callback for UI updates
+- Enhanced message display to show mode indicators
+
+**Testing:**
+- All integration tests pass (test_sprint6_backend.py)
+- API signature correctly updated with mode parameter
+- Backend properly receives and processes mode selection
+- UI components properly integrated into main interface
+
+**User Experience Improvements:**
+- Clear visual distinction between modes
+- "Recommended" badge on Combined mode
+- Informative tooltips explaining when to use each mode
+- Smooth transitions when switching modes
+- Mode-specific status messages during processing
+
+**No Breaking Changes:**
+- Default mode is "combined" maintaining backward compatibility
+- Existing chat functionality unaffected
+- All previous features continue to work
+
+**Next Sprint Prep:**
+- Sprint M7 (Natural Language Memory Management) ready to proceed
+- Chat mode infrastructure complete and tested
+- Users can now choose how AI processes their queries
 - No breaking changes to existing functionality
 - **Expandable Content:** Show more/less for long text content
 - **Metadata Display:** Shows dates, actors, sources when available

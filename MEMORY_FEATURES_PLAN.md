@@ -9,13 +9,13 @@
 | **M3** | ✅ Complete | 2025-08-20 | Memory Edit API |
 | **M4** | ✅ Complete | 2025-08-20 | Memory Editor UI |
 | **M5** | ✅ Complete | 2025-08-20 | Chat Mode Infrastructure |
-| M6 | 🔜 Next | - | Chat Mode UI |
-| M7 | Pending | - | Natural Language Memory Management |
+| **M6** | ✅ Complete | 2025-08-20 | Chat Mode UI |
+| M7 | 🔜 Next | - | Natural Language Memory Management |
 | M8 | Pending | - | Memory Search and Analytics |
 | M9 | Pending | - | Memory Import/Export |
 | M10 | Pending | - | Performance and Polish |
 
-**Current Progress**: 5 of 10 sprints completed (50%)
+**Current Progress**: 6 of 10 sprints completed (60%)
 
 ## Overview
 
