@@ -2288,27 +2288,79 @@ Implemented comprehensive testing infrastructure and reliability features includ
 
 ---
 
-## 🚀 Final Summary
+### Sprint M5: Chat Mode Infrastructure (Completed 2025-08-20, 2h)
 
-**Project Status:** Sprint L7 completed successfully. The Letta integration now has comprehensive testing and reliability features that ensure production-ready operation.
+**Implementation Summary:**
+- Added ChatMode enum with three modes: RAG_ONLY, MEMORY_ONLY, COMBINED
+- Updated ChatRequest model to accept mode parameter (default: COMBINED)
+- Implemented memory_only_chat method in LettaAdapter for direct agent interaction
+- Modified RAGEngine.generate_answer to handle different modes appropriately
+- Updated chat API endpoint to pass mode parameter through the pipeline
 
-**Remaining Work:**
-- Sprint L8: Documentation & Polish (1 hour) - Final user documentation and UI polish
+**Key Technical Decisions:**
+- Used enum for type-safe mode selection
+- Defaulted to COMBINED mode for backward compatibility
+- Memory-only mode delegates entirely to Letta agent without document context
+- RAG-only mode skips memory recall to focus on document search
+- Combined mode maintains existing behavior with both sources
 
-**Key Achievements in Sprint L7:**
-1. **Circuit Breaker**: Prevents cascading failures with automatic recovery
-2. **Request Queue**: Improves efficiency through batching and prioritization
-3. **Enhanced Connection Manager**: Robust timeout and resource management
-4. **Comprehensive Testing**: 60+ test cases covering all failure scenarios
-5. **Performance Benchmarks**: Established baselines and verified targets met
+**Code Changes:**
+- `app/models.py`: Added ChatMode enum and updated ChatRequest
+- `app/letta_adapter.py`: Added memory_only_chat() method
+- `app/rag.py`: Added mode parameter and conditional logic
+- `app/api.py`: Updated chat endpoint to pass mode
+- `tests/unit/test_rag.py`: Added comprehensive test suite for all modes
 
-**Production Readiness:**
-- ✅ Error handling and recovery mechanisms in place
-- ✅ Performance meets all specified targets
-- ✅ Resource management prevents memory leaks
-- ✅ Graceful degradation when Letta unavailable
-- ✅ Comprehensive test coverage for reliability
+**Testing:**
+- Created 4 unit tests covering all chat modes
+- Tests verify proper isolation (RAG-only excludes memory, Memory-only excludes documents)
+- Tests confirm backward compatibility (default behavior unchanged)
+- All new tests passing
+
+**Verification Steps Completed:**
+- ✅ Each mode can be specified via API
+- ✅ RAG_ONLY mode returns no memory items
+- ✅ MEMORY_ONLY mode returns no document sources
+- ✅ COMBINED mode works as before
+- ✅ Memory-only mode provides faster response (no vector search)
+
+**No Breaking Changes:**
+- Default mode ensures existing integrations continue working
+- All changes are additive
+- Feature can be disabled by not exposing mode selector in UI
 
 ---
 
-*This document serves as the complete development record for the Letta Construction Claim Assistant project. Sprint L7 has added critical reliability features that make the system production-ready.*
+## 🚀 Project Summary
+
+**Project Status:** Sprint M5 (Chat Mode Infrastructure) completed successfully. The system now supports three distinct chat modes allowing users to control whether queries search documents, memory, or both.
+
+**Memory Features Progress:**
+- ✅ Sprint M1: Memory Items List API 
+- ✅ Sprint M2: Memory Viewer UI
+- ✅ Sprint M3: Memory Edit API
+- ✅ Sprint M4: Memory Editor UI
+- ✅ Sprint M5: Chat Mode Infrastructure
+- ⏳ Sprint M6: Chat Mode UI (pending)
+- ⏳ Sprint M7: Natural Language Memory Management (pending)
+- ⏳ Sprint M8: Memory Search and Analytics (pending)
+- ⏳ Sprint M9: Memory Import/Export (pending)
+- ⏳ Sprint M10: Performance and Polish (pending)
+
+**Key Achievements in Sprint M5:**
+1. **Mode Flexibility**: Users can now choose RAG-only, Memory-only, or Combined modes
+2. **Performance Option**: Memory-only mode provides faster responses for known information
+3. **Clean Architecture**: Mode handling integrated seamlessly into existing pipeline
+4. **Full Test Coverage**: All modes tested with proper isolation verification
+5. **Backward Compatible**: Existing functionality preserved with sensible defaults
+
+**Production Readiness:**
+- ✅ Type-safe mode selection with enum
+- ✅ Graceful fallback when Letta unavailable in memory-only mode
+- ✅ Comprehensive test coverage for all modes
+- ✅ No breaking changes to existing API
+- ✅ Ready for UI integration in Sprint M6
+
+---
+
+*This document serves as the complete development record for the Letta Construction Claim Assistant project. Sprint M5 has successfully added chat mode infrastructure, providing the backend support for flexible retrieval source selection.*

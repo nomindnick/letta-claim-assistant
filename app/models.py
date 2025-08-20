@@ -10,8 +10,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Literal, Union
 from datetime import datetime
+from enum import Enum
 import uuid
 from pydantic import BaseModel, Field, field_validator, model_serializer
+
+
+class ChatMode(str, Enum):
+    """Chat mode for controlling retrieval sources."""
+    RAG_ONLY = "rag"        # Documents only
+    MEMORY_ONLY = "memory"  # Agent memory only
+    COMBINED = "combined"   # Current behavior (default)
 
 
 class MatterPaths(BaseModel):
@@ -178,6 +186,7 @@ class ChatRequest(BaseModel):
     matter_id: str = Field(..., description="Matter ID for context")
     query: str = Field(..., min_length=1, description="User query")
     k: int = Field(default=8, ge=1, le=20, description="Number of chunks to retrieve")
+    mode: ChatMode = Field(default=ChatMode.COMBINED, description="Chat mode: rag, memory, or combined")
     model: Optional[str] = Field(None, description="Model to use (defaults to active)")
     max_tokens: Optional[int] = Field(None, ge=100, le=4000, description="Maximum tokens in response (None for no limit)")
 

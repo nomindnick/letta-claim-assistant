@@ -607,3 +607,218 @@ This delay exceeds the 5-consecutive-day threshold specified in Section 3.2 of t
             
             # Verify search was called properly
             mock_vector_store.search.assert_called_once_with(query, k=8)
+
+
+class TestChatModes:
+    """Test different chat modes (RAG_ONLY, MEMORY_ONLY, COMBINED)."""
+    
+    @pytest.fixture
+    def temp_matter_dir(self):
+        """Create temporary matter directory."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            matter_root = Path(temp_dir) / "test_matter"
+            matter_root.mkdir()
+            
+            # Create required subdirectories
+            (matter_root / "docs").mkdir()
+            (matter_root / "vectors").mkdir()
+            (matter_root / "knowledge").mkdir()
+            
+            yield matter_root
+    
+    @pytest.fixture
+    def temp_matter(self, temp_matter_dir):
+        """Create test matter for testing."""
+        paths = MatterPaths.from_root(temp_matter_dir)
+        return Matter(
+            id="test-matter-modes",
+            name="Test Matter for Modes",
+            slug="test-matter-modes",
+            embedding_model="mock-embed",
+            generation_model="mock-gen",
+            paths=paths
+        )
+    
+    @pytest.mark.asyncio
+    async def test_rag_only_mode(self, temp_matter):
+        """Test RAG_ONLY mode skips memory recall."""
+        matter = temp_matter
+        
+        # Create mock LLM provider
+        mock_llm = MockLLMProvider()
+        mock_llm.set_responses([
+            "Based on the documents, the project deadline is March 15, 2023."
+        ])
+        
+        # Create mock vector store with results
+        mock_vector_store = AsyncMock(spec=VectorStore)
+        mock_vector_store.search.return_value = [
+            SearchResult(
+                chunk_id="chunk1",
+                doc_name="Contract.pdf",
+                page_start=5,
+                page_end=5,
+                text="Project deadline: March 15, 2023",
+                similarity_score=0.95,
+                metadata={}
+            )
+        ]
+        
+        # Create mock Letta adapter
+        mock_letta = AsyncMock()
+        mock_letta.recall.return_value = []  # Should not be called
+        
+        # Create RAG engine with mocks
+        rag_engine = RAGEngine(
+            matter=matter,
+            llm_provider=mock_llm,
+            vector_store=mock_vector_store
+        )
+        rag_engine.letta_adapter = mock_letta
+        
+        # Test RAG_ONLY mode
+        from app.models import ChatMode
+        response = await rag_engine.generate_answer(
+            query="What is the project deadline?",
+            mode=ChatMode.RAG_ONLY,
+            k=5
+        )
+        
+        # Verify response
+        assert "March 15, 2023" in response.answer
+        assert len(response.sources) > 0
+        assert len(response.used_memory) == 0  # No memory items used
+        
+        # Verify memory recall was NOT called
+        mock_letta.recall.assert_not_called()
+        
+        # Verify vector search WAS called
+        mock_vector_store.search.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_memory_only_mode(self, temp_matter):
+        """Test MEMORY_ONLY mode uses only Letta agent."""
+        matter = temp_matter
+        
+        # Create mock Letta adapter
+        mock_letta = AsyncMock()
+        mock_letta.memory_only_chat.return_value = {
+            "answer": "From my memory, the contractor is ABC Construction.",
+            "sources": [],
+            "memory_used": True,
+            "followups": ["What was the contract value?"]
+        }
+        
+        # Create mock vector store - should not be called
+        mock_vector_store = AsyncMock(spec=VectorStore)
+        
+        # Create RAG engine
+        rag_engine = RAGEngine(
+            matter=matter,
+            vector_store=mock_vector_store
+        )
+        rag_engine.letta_adapter = mock_letta
+        
+        # Test MEMORY_ONLY mode
+        from app.models import ChatMode
+        response = await rag_engine.generate_answer(
+            query="Who is the contractor?",
+            mode=ChatMode.MEMORY_ONLY
+        )
+        
+        # Verify response
+        assert "ABC Construction" in response.answer
+        assert len(response.sources) == 0  # No document sources
+        assert response.confidence_score == 0.8  # Memory-based confidence
+        
+        # Verify memory_only_chat was called
+        mock_letta.memory_only_chat.assert_called_once_with("Who is the contractor?")
+        
+        # Verify vector search was NOT called
+        mock_vector_store.search.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_combined_mode(self, temp_matter):
+        """Test COMBINED mode uses both RAG and memory."""
+        matter = temp_matter
+        
+        # Create mock LLM provider
+        mock_llm = MockLLMProvider()
+        mock_llm.set_responses([
+            "Based on documents and memory, the delay was 15 days due to weather."
+        ])
+        
+        # Create mock vector store
+        mock_vector_store = AsyncMock(spec=VectorStore)
+        mock_vector_store.search.return_value = [
+            SearchResult(
+                chunk_id="chunk1",
+                doc_name="DailyLog.pdf",
+                page_start=10,
+                page_end=10,
+                text="Weather delay: 15 days",
+                similarity_score=0.9,
+                metadata={}
+            )
+        ]
+        
+        # Create mock Letta adapter
+        mock_letta = AsyncMock()
+        mock_letta.recall.return_value = [
+            KnowledgeItem(
+                type="Event",
+                label="Weather Delay",
+                date="2023-02-15",
+                actors=["Contractor"],
+                doc_refs=[],
+                support_snippet="15-day weather delay documented"
+            )
+        ]
+        mock_letta.suggest_followups.return_value = [
+            "Is this delay compensable?"
+        ]
+        
+        # Create RAG engine
+        rag_engine = RAGEngine(
+            matter=matter,
+            llm_provider=mock_llm,
+            vector_store=mock_vector_store
+        )
+        rag_engine.letta_adapter = mock_letta
+        
+        # Test COMBINED mode (default)
+        from app.models import ChatMode
+        response = await rag_engine.generate_answer(
+            query="What delays occurred?",
+            mode=ChatMode.COMBINED
+        )
+        
+        # Verify response uses both sources
+        assert "15 days" in response.answer
+        assert len(response.sources) > 0  # Has document sources
+        assert len(response.used_memory) > 0  # Has memory items
+        
+        # Verify both systems were called
+        mock_vector_store.search.assert_called_once()
+        mock_letta.recall.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_memory_only_mode_without_letta(self, temp_matter):
+        """Test MEMORY_ONLY mode when Letta is not available."""
+        matter = temp_matter
+        
+        # Create RAG engine without Letta adapter
+        rag_engine = RAGEngine(matter=matter)
+        rag_engine.letta_adapter = None
+        
+        # Test MEMORY_ONLY mode without Letta
+        from app.models import ChatMode
+        response = await rag_engine.generate_answer(
+            query="What is the status?",
+            mode=ChatMode.MEMORY_ONLY
+        )
+        
+        # Verify fallback response
+        assert "not available" in response.answer.lower()
+        assert len(response.sources) == 0
+        assert len(response.used_memory) == 0

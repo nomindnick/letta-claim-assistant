@@ -930,6 +930,7 @@ async def chat(request: ChatRequest):
             query=request.query,
             k=request.k,
             k_memory=6,  # Default memory items to recall
+            mode=request.mode,  # Pass the chat mode from request
             max_tokens=request.max_tokens,
             temperature=0.2,  # Conservative temperature for legal analysis
             max_retry_attempts=1  # Allow one retry for quality improvement

@@ -14,7 +14,7 @@ import time
 from .logging_conf import get_logger
 from .vectors import VectorStore, SearchResult
 from .matters import Matter
-from .models import KnowledgeItem, SourceChunk
+from .models import KnowledgeItem, SourceChunk, ChatMode
 from .llm.ollama_provider import OllamaProvider
 from .llm.base import LLMProvider
 from .prompts import (
@@ -123,6 +123,7 @@ class RAGEngine:
         query: str,
         k: int = 8,
         k_memory: int = 6,
+        mode: ChatMode = ChatMode.COMBINED,
         max_tokens: Optional[int] = None,
         temperature: float = 0.2,
         conversation_history: Optional[List[str]] = None,
@@ -136,6 +137,7 @@ class RAGEngine:
             query: User query
             k: Number of vector search results to retrieve
             k_memory: Number of memory items to recall
+            mode: Chat mode (RAG_ONLY, MEMORY_ONLY, or COMBINED)
             max_tokens: Maximum tokens for generation
             temperature: Generation temperature
             
@@ -149,6 +151,7 @@ class RAGEngine:
             "Starting RAG answer generation",
             matter_id=self.matter.id,
             query_preview=query[:100],
+            mode=mode.value,
             k=k,
             k_memory=k_memory
         )
@@ -156,6 +159,29 @@ class RAGEngine:
         start_time = time.time()
         
         try:
+            # Handle MEMORY_ONLY mode - delegate to Letta adapter
+            if mode == ChatMode.MEMORY_ONLY:
+                if not self.letta_adapter:
+                    logger.warning("Memory-only mode requested but Letta adapter not available")
+                    return RAGResponse(
+                        answer="Memory-only mode is not available for this matter.",
+                        sources=[],
+                        followups=[],
+                        used_memory=[],
+                        processing_time=time.time() - start_time
+                    )
+                
+                logger.debug("Processing memory-only chat")
+                memory_response = await self.letta_adapter.memory_only_chat(query)
+                
+                return RAGResponse(
+                    answer=memory_response.get("answer", ""),
+                    sources=[],  # No document sources in memory-only mode
+                    followups=memory_response.get("followups", []),
+                    used_memory=[],  # Memory items not individually listed in this mode
+                    processing_time=time.time() - start_time,
+                    confidence_score=0.8 if memory_response.get("memory_used") else 0.3
+                )
             # Step 1: Enhanced retrieval using hybrid system or fallback to basic vector search
             if self.enable_advanced_features and self.hybrid_retrieval:
                 logger.debug("Performing hybrid retrieval")
@@ -166,9 +192,9 @@ class RAGEngine:
                     recent_documents=recent_documents or []
                 )
                 
-                # Get memory items first for hybrid retrieval
+                # Get memory items first for hybrid retrieval (skip if RAG_ONLY mode)
                 memory_items = []
-                if self.letta_adapter:
+                if mode != ChatMode.RAG_ONLY and self.letta_adapter:
                     try:
                         memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
                         logger.debug("Agent memory recall completed", memory_items=len(memory_items))
@@ -210,9 +236,9 @@ class RAGEngine:
                     avg_similarity=sum(r.similarity_score for r in search_results) / len(search_results) if search_results else 0
                 )
                 
-                # Get memory items for basic retrieval
+                # Get memory items for basic retrieval (skip if RAG_ONLY mode)
                 memory_items = []
-                if self.letta_adapter:
+                if mode != ChatMode.RAG_ONLY and self.letta_adapter:
                     try:
                         memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
                         logger.debug("Agent memory recall completed", memory_items=len(memory_items))
@@ -613,6 +639,7 @@ class RAGEngine:
         query: str,
         k: int = 8,
         k_memory: int = 6,
+        mode: ChatMode = ChatMode.COMBINED,
         max_tokens: Optional[int] = None,
         temperature: float = 0.2,
         conversation_history: Optional[List[str]] = None,
@@ -632,6 +659,7 @@ class RAGEngine:
                     query=query,
                     k=k,
                     k_memory=k_memory,
+                    mode=mode,
                     max_tokens=max_tokens,
                     temperature=temperature + (attempt * 0.1),  # Slightly increase temp on retry
                     conversation_history=conversation_history,

@@ -8,14 +8,14 @@
 | **M2** | ✅ Complete | 2025-08-20 | Memory Viewer UI |
 | **M3** | ✅ Complete | 2025-08-20 | Memory Edit API |
 | **M4** | ✅ Complete | 2025-08-20 | Memory Editor UI |
-| M5 | 🔜 Next | - | Chat Mode Infrastructure |
-| M6 | Pending | - | Chat Mode UI |
+| **M5** | ✅ Complete | 2025-08-20 | Chat Mode Infrastructure |
+| M6 | 🔜 Next | - | Chat Mode UI |
 | M7 | Pending | - | Natural Language Memory Management |
 | M8 | Pending | - | Memory Search and Analytics |
 | M9 | Pending | - | Memory Import/Export |
 | M10 | Pending | - | Performance and Polish |
 
-**Current Progress**: 4 of 10 sprints completed (40%)
+**Current Progress**: 5 of 10 sprints completed (50%)
 
 ## Overview
 
@@ -401,6 +401,19 @@ The codebase already provides strong foundation for these features:
 - Check RAG-only mode excludes memory
 
 ### Rollback: Default mode continues to work as before
+
+### ✅ COMPLETION NOTES (2025-08-20):
+- **Implementation Time**: 2 hours
+- **Key Additions**:
+  - Added ChatMode enum with RAG_ONLY, MEMORY_ONLY, COMBINED values
+  - Updated ChatRequest to include optional mode parameter with COMBINED as default
+  - Implemented memory_only_chat method in LettaAdapter for direct agent interaction
+  - Added mode handling logic in RAGEngine.generate_answer
+  - Updated generate_answer_with_quality_retry to pass mode through
+  - Modified chat API endpoint to accept and pass mode parameter
+- **Testing**: 4 new unit tests all passing, verifying mode isolation and behavior
+- **No Breaking Changes**: Default mode ensures backward compatibility
+- **Ready for UI Integration**: Backend fully prepared for Sprint M6
 
 ---
 

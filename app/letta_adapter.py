@@ -870,6 +870,111 @@ Return only the questions, one per line."""
             logger.warning("Follow-up generation failed", error=str(e))
             return self._fallback_followups()
     
+    async def memory_only_chat(self, query: str) -> Dict[str, Any]:
+        """
+        Direct interaction with Letta agent without RAG.
+        
+        This method enables memory-only mode where the agent responds based
+        solely on its accumulated knowledge without searching documents.
+        
+        Args:
+            query: User query to send to the agent
+            
+        Returns:
+            Dict with answer, empty sources, and memory_used flag
+        """
+        # Ensure initialized
+        if not await self._ensure_initialized():
+            logger.warning("Letta not available for memory-only chat")
+            return {
+                "answer": "Memory-only mode is not available. The Letta agent is not initialized.",
+                "sources": [],
+                "memory_used": False,
+                "error": "Letta agent not available"
+            }
+        
+        if not self.agent_id:
+            return {
+                "answer": "Memory-only mode is not available. No agent found for this matter.",
+                "sources": [],
+                "memory_used": False,
+                "error": "No agent ID"
+            }
+        
+        try:
+            logger.info(
+                "Processing memory-only chat",
+                matter_id=self.matter_id,
+                query_preview=query[:100]
+            )
+            
+            # Prepare the prompt for memory-only response
+            memory_prompt = f"""You are responding based ONLY on your accumulated memory and knowledge about this matter.
+Do not reference or search any documents. Use only the information you have learned and stored in memory.
+
+User query: {query}
+
+Provide a comprehensive answer based on what you remember about this matter. If you don't have sufficient information in memory, acknowledge this limitation."""
+            
+            # Send message to agent
+            async def _chat_operation():
+                return await self.client.messages.send_message(
+                    agent_id=self.agent_id,
+                    role="user",
+                    message=memory_prompt,
+                    stream=False
+                )
+            
+            response = await connection_manager.execute_with_retry(
+                "memory_chat",
+                _chat_operation
+            )
+            
+            if not response or not hasattr(response, 'messages'):
+                return {
+                    "answer": "I couldn't generate a response from memory. Please try again.",
+                    "sources": [],
+                    "memory_used": True,
+                    "error": "No response from agent"
+                }
+            
+            # Extract the answer from the response
+            answer = ""
+            for msg in response.messages:
+                if hasattr(msg, 'text') and msg.text:
+                    answer += msg.text + "\n"
+            
+            answer = answer.strip()
+            
+            if not answer:
+                answer = "I don't have sufficient information in my memory to answer this question."
+            
+            logger.info(
+                "Memory-only chat completed",
+                matter_id=self.matter_id,
+                answer_length=len(answer)
+            )
+            
+            return {
+                "answer": answer,
+                "sources": [],  # No document sources in memory-only mode
+                "memory_used": True,
+                "followups": await self.suggest_followups(query, answer)
+            }
+            
+        except Exception as e:
+            logger.error(
+                "Memory-only chat failed",
+                matter_id=self.matter_id,
+                error=str(e)
+            )
+            return {
+                "answer": f"Memory-only chat failed: {str(e)}",
+                "sources": [],
+                "memory_used": False,
+                "error": str(e)
+            }
+    
     async def get_memory_stats(self) -> Dict[str, Any]:
         """Get statistics about agent memory usage."""
         # Ensure initialized
