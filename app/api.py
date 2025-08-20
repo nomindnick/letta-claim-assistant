@@ -20,7 +20,8 @@ from .models import (
     CreateMatterRequest, CreateMatterResponse, MatterSummary,
     ChatRequest, ChatResponse, JobStatus, DocumentInfo,
     QualityInsights, RetrievalWeights,
-    CreateMemoryItemRequest, UpdateMemoryItemRequest, MemoryOperationResponse
+    CreateMemoryItemRequest, UpdateMemoryItemRequest, MemoryOperationResponse,
+    MemoryCommandRequest, MemoryCommandResponse
 )
 from .logging_conf import get_logger
 from .matters import matter_manager
@@ -1885,6 +1886,155 @@ async def delete_memory_item(matter_id: str, item_id: str):
             item_id=item_id,
             message="Failed to delete memory item",
             error=str(e)
+        )
+
+
+@app.post("/api/matters/{matter_id}/memory/command")
+async def process_memory_command(matter_id: str, request: MemoryCommandRequest):
+    """Process natural language memory management commands."""
+    try:
+        # Import command parser
+        from .memory_commands import parse_memory_command, MemoryCommandParser, MemoryAction
+        
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Parse the command
+        command = parse_memory_command(request.command)
+        
+        if not command:
+            # Command not recognized, provide suggestion
+            suggestion = MemoryCommandParser.suggest_command(request.command)
+            return MemoryCommandResponse(
+                success=False,
+                message="I couldn't understand that as a memory command. Try being more specific.",
+                suggestion=suggestion
+            )
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_path=matter.paths.root,
+            matter_name=matter.name,
+            matter_id=matter.id
+        )
+        
+        # Execute command based on action type
+        if command.action == MemoryAction.REMEMBER:
+            # Create new memory item
+            from .models import KnowledgeItem
+            
+            # Create a Fact type knowledge item
+            knowledge_item = KnowledgeItem(
+                type="Fact",
+                label=command.content[:100],  # First 100 chars as label
+                support_snippet=command.content
+            )
+            
+            item_id = await letta_adapter.create_memory_item(
+                text=knowledge_item.model_dump_json(),
+                type="Fact"
+            )
+            
+            # Generate undo token (simple approach - could be enhanced)
+            import uuid
+            undo_token = str(uuid.uuid4())
+            
+            # Store undo info (in production, this would be cached)
+            # For now, we'll just return the token
+            
+            return MemoryCommandResponse(
+                success=True,
+                action=command.action.value,
+                content=command.content,
+                confidence=command.confidence,
+                message=MemoryCommandParser.format_confirmation(command),
+                item_id=item_id,
+                undo_token=undo_token
+            )
+        
+        elif command.action == MemoryAction.FORGET:
+            # Search for and delete matching memories
+            success = await letta_adapter.search_and_delete_memory(command.content)
+            
+            if success:
+                return MemoryCommandResponse(
+                    success=True,
+                    action=command.action.value,
+                    content=command.content,
+                    confidence=command.confidence,
+                    message=MemoryCommandParser.format_confirmation(command)
+                )
+            else:
+                return MemoryCommandResponse(
+                    success=False,
+                    action=command.action.value,
+                    content=command.content,
+                    confidence=command.confidence,
+                    message=f"I couldn't find any memories matching: {command.content}"
+                )
+        
+        elif command.action == MemoryAction.UPDATE:
+            # Update existing memory
+            success = await letta_adapter.search_and_update_memory(
+                target=command.target,
+                new_content=command.content
+            )
+            
+            if success:
+                return MemoryCommandResponse(
+                    success=True,
+                    action=command.action.value,
+                    content=command.content,
+                    confidence=command.confidence,
+                    message=MemoryCommandParser.format_confirmation(command)
+                )
+            else:
+                return MemoryCommandResponse(
+                    success=False,
+                    action=command.action.value,
+                    content=command.content,
+                    confidence=command.confidence,
+                    message=f"I couldn't find memories about '{command.target}' to update"
+                )
+        
+        elif command.action == MemoryAction.QUERY:
+            # Query memory (this would typically be handled by chat, but we can provide a direct response)
+            memories = await letta_adapter.search_memories(command.content, limit=5)
+            
+            if memories:
+                memory_summary = "\n".join([f"• {m.text[:200]}" for m in memories[:3]])
+                return MemoryCommandResponse(
+                    success=True,
+                    action=command.action.value,
+                    content=command.content,
+                    confidence=command.confidence,
+                    message=f"Here's what I remember about {command.content}:\n{memory_summary}"
+                )
+            else:
+                return MemoryCommandResponse(
+                    success=True,
+                    action=command.action.value,
+                    content=command.content,
+                    confidence=command.confidence,
+                    message=f"I don't have any specific memories about {command.content}"
+                )
+        
+        else:
+            return MemoryCommandResponse(
+                success=False,
+                message="Unknown command action"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to process memory command: {str(e)}", exc_info=True)
+        return MemoryCommandResponse(
+            success=False,
+            message=f"Failed to process memory command: {str(e)}"
         )
 
 

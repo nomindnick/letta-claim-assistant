@@ -57,6 +57,9 @@ class RAGResponse:
     confidence_score: float = 0.0
     quality_warnings: List[str] = None
     improvement_suggestions: List[str] = None
+    
+    # Memory command indicator
+    is_memory_command: bool = False
 
 
 class RAGEngine:
@@ -159,6 +162,92 @@ class RAGEngine:
         start_time = time.time()
         
         try:
+            # Check if this is a memory command (unless in RAG_ONLY mode)
+            if mode != ChatMode.RAG_ONLY:
+                from .memory_commands import parse_memory_command, MemoryCommandParser, MemoryAction
+                command = parse_memory_command(query)
+                
+                if command and self.letta_adapter:
+                    logger.info(
+                        "Memory command detected",
+                        action=command.action.value,
+                        confidence=command.confidence
+                    )
+                    
+                    # Process the memory command
+                    if command.action == MemoryAction.REMEMBER:
+                        # Create new memory
+                        from .models import KnowledgeItem
+                        knowledge_item = KnowledgeItem(
+                            type="Fact",
+                            label=command.content[:100],
+                            support_snippet=command.content
+                        )
+                        
+                        item_id = await self.letta_adapter.create_memory_item(
+                            text=knowledge_item.model_dump_json(),
+                            type="Fact"
+                        )
+                        
+                        confirmation = MemoryCommandParser.format_confirmation(command)
+                        
+                        return RAGResponse(
+                            answer=confirmation,
+                            sources=[],
+                            followups=["What else would you like me to remember?"],
+                            used_memory=[],
+                            processing_time=time.time() - start_time,
+                            confidence_score=command.confidence,
+                            is_memory_command=True
+                        )
+                    
+                    elif command.action == MemoryAction.FORGET:
+                        # Delete matching memories
+                        success = await self.letta_adapter.search_and_delete_memory(command.content)
+                        
+                        if success:
+                            confirmation = MemoryCommandParser.format_confirmation(command)
+                        else:
+                            confirmation = f"I couldn't find any memories matching: {command.content}"
+                        
+                        return RAGResponse(
+                            answer=confirmation,
+                            sources=[],
+                            followups=[],
+                            used_memory=[],
+                            processing_time=time.time() - start_time,
+                            confidence_score=command.confidence if success else 0.3,
+                            is_memory_command=True
+                        )
+                    
+                    elif command.action == MemoryAction.UPDATE:
+                        # Update existing memory
+                        success = await self.letta_adapter.search_and_update_memory(
+                            target=command.target,
+                            new_content=command.content
+                        )
+                        
+                        if success:
+                            confirmation = MemoryCommandParser.format_confirmation(command)
+                        else:
+                            confirmation = f"I couldn't find memories about '{command.target}' to update"
+                        
+                        return RAGResponse(
+                            answer=confirmation,
+                            sources=[],
+                            followups=[],
+                            used_memory=[],
+                            processing_time=time.time() - start_time,
+                            confidence_score=command.confidence if success else 0.3,
+                            is_memory_command=True
+                        )
+                    
+                    elif command.action == MemoryAction.QUERY:
+                        # This will fall through to normal processing but in memory-only mode
+                        # Switch to memory-only mode for this query
+                        mode = ChatMode.MEMORY_ONLY
+                        logger.info("Memory query command - switching to memory-only mode")
+            
             # Handle MEMORY_ONLY mode - delegate to Letta adapter
             if mode == ChatMode.MEMORY_ONLY:
                 if not self.letta_adapter:

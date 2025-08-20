@@ -565,3 +565,23 @@ class MemoryOperationResponse(BaseModel):
     item_id: Optional[str] = Field(None, description="ID of the affected memory item")
     message: str = Field(..., description="Operation result message")
     error: Optional[str] = Field(None, description="Error message if operation failed")
+
+
+class MemoryCommandRequest(BaseModel):
+    """Request model for natural language memory commands."""
+    
+    command: str = Field(..., min_length=1, description="Natural language command")
+    matter_id: str = Field(..., description="Matter ID for context")
+
+
+class MemoryCommandResponse(BaseModel):
+    """Response model for memory command processing."""
+    
+    success: bool = Field(..., description="Whether command was executed")
+    action: Optional[str] = Field(None, description="Detected action type")
+    content: Optional[str] = Field(None, description="Extracted content")
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Command detection confidence")
+    message: str = Field(..., description="User-friendly confirmation or error message")
+    item_id: Optional[str] = Field(None, description="ID of affected memory item")
+    undo_token: Optional[str] = Field(None, description="Token for undoing this operation")
+    suggestion: Optional[str] = Field(None, description="Suggested command format if parsing failed")

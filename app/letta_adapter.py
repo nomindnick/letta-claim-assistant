@@ -2716,6 +2716,210 @@ Provide a comprehensive answer based on what you remember about this matter. If 
             )
             raise
     
+    async def search_memories(
+        self,
+        query: str,
+        limit: int = 10,
+        search_type: str = "semantic"
+    ) -> List["MemoryItem"]:
+        """
+        Search for memories matching a query.
+        
+        Args:
+            query: The search query
+            limit: Maximum number of results
+            search_type: Type of search ("semantic", "keyword", or "exact")
+            
+        Returns:
+            List of matching memory items
+        """
+        await self._ensure_initialized()
+        
+        if self.fallback_mode:
+            return []
+        
+        try:
+            if search_type == "semantic":
+                # Use Letta's semantic search
+                passages = await self.client.agents.passages.list(
+                    agent_id=self.agent_id,
+                    search=query,
+                    limit=limit
+                )
+            else:
+                # For keyword/exact search, get all and filter
+                passages = await self.client.agents.passages.list(
+                    agent_id=self.agent_id,
+                    limit=1000  # Get more for local filtering
+                )
+                
+                # Filter based on search type
+                matching = []
+                query_lower = query.lower()
+                
+                for passage in passages:
+                    text_lower = passage.text.lower()
+                    
+                    if search_type == "exact":
+                        if query_lower in text_lower:
+                            matching.append(passage)
+                    elif search_type == "keyword":
+                        # Check if all keywords are present
+                        keywords = query_lower.split()
+                        if all(keyword in text_lower for keyword in keywords):
+                            matching.append(passage)
+                    
+                    if len(matching) >= limit:
+                        break
+                
+                passages = matching[:limit]
+            
+            # Convert to MemoryItem objects
+            from .models import MemoryItem
+            return [MemoryItem.from_passage(p) for p in passages]
+            
+        except Exception as e:
+            logger.error(
+                "Failed to search memories",
+                query=query,
+                error=str(e),
+                matter_id=self.matter_id
+            )
+            return []
+    
+    async def search_and_delete_memory(self, content: str) -> bool:
+        """
+        Search for and delete memories matching the content.
+        
+        Args:
+            content: Content to search for and delete
+            
+        Returns:
+            True if any memories were deleted
+        """
+        await self._ensure_initialized()
+        
+        if self.fallback_mode:
+            return False
+        
+        try:
+            # Search for matching memories
+            memories = await self.search_memories(content, limit=10, search_type="keyword")
+            
+            if not memories:
+                return False
+            
+            # Delete each matching memory
+            deleted_count = 0
+            for memory in memories:
+                try:
+                    await self.delete_memory_item(memory.id)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.warning(
+                        "Failed to delete individual memory",
+                        memory_id=memory.id,
+                        error=str(e)
+                    )
+            
+            logger.info(
+                "Deleted memories matching content",
+                content=content,
+                deleted_count=deleted_count,
+                matter_id=self.matter_id
+            )
+            
+            return deleted_count > 0
+            
+        except Exception as e:
+            logger.error(
+                "Failed to search and delete memory",
+                content=content,
+                error=str(e),
+                matter_id=self.matter_id
+            )
+            return False
+    
+    async def search_and_update_memory(
+        self,
+        target: str,
+        new_content: str
+    ) -> bool:
+        """
+        Search for and update memories matching the target.
+        
+        Args:
+            target: Target content to search for
+            new_content: New content to replace with
+            
+        Returns:
+            True if any memories were updated
+        """
+        await self._ensure_initialized()
+        
+        if self.fallback_mode:
+            return False
+        
+        try:
+            # Search for matching memories
+            memories = await self.search_memories(target, limit=5, search_type="keyword")
+            
+            if not memories:
+                return False
+            
+            # Update the first matching memory
+            # (In a more sophisticated version, we could update all or ask for clarification)
+            memory = memories[0]
+            
+            # Parse existing memory to preserve type if it's a KnowledgeItem
+            preserve_type = True
+            memory_type = "Fact"
+            
+            if memory.text.startswith('{'):
+                try:
+                    existing_data = json.loads(memory.text)
+                    memory_type = existing_data.get('type', 'Fact')
+                except:
+                    pass
+            
+            # Create updated content
+            if preserve_type and memory.text.startswith('{'):
+                # Update the KnowledgeItem
+                try:
+                    existing_data = json.loads(memory.text)
+                    existing_data['label'] = new_content[:100]
+                    existing_data['support_snippet'] = new_content
+                    new_text = json.dumps(existing_data)
+                except:
+                    new_text = new_content
+            else:
+                new_text = new_content
+            
+            # Update the memory
+            await self.update_memory_item(
+                item_id=memory.id,
+                new_text=new_text,
+                preserve_type=preserve_type
+            )
+            
+            logger.info(
+                "Updated memory",
+                target=target,
+                new_content=new_content[:100],
+                matter_id=self.matter_id
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(
+                "Failed to search and update memory",
+                target=target,
+                error=str(e),
+                matter_id=self.matter_id
+            )
+            return False
+    
     async def _backup_memory_item(self, item: "MemoryItem") -> None:
         """
         Backup a memory item before deletion or update.
