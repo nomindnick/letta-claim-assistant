@@ -8,12 +8,13 @@ job status tracking, chat/RAG operations, and settings management.
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ValidationError
 import json
 import time
 import traceback
+import io
 from datetime import datetime
 
 from .models import (
@@ -2133,6 +2134,156 @@ async def get_memory_analytics(matter_id: str):
             total_memories=0,
             error=f"Failed to retrieve analytics: {str(e)}"
         )
+
+
+@app.get("/api/matters/{matter_id}/memory/export")
+async def export_memory(
+    matter_id: str,
+    format: str = Query("json", description="Export format (json or csv)"),
+    include_metadata: bool = Query(True, description="Include metadata in export")
+):
+    """
+    Export memory to JSON or CSV format.
+    
+    Args:
+        matter_id: The matter ID
+        format: Export format (json or csv)
+        include_metadata: Whether to include metadata
+        
+    Returns:
+        File download response
+    """
+    try:
+        matter = get_matter(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter {matter_id} not found")
+        
+        # Get Letta adapter
+        letta_adapter = get_letta_adapter(matter)
+        if not letta_adapter:
+            raise HTTPException(status_code=503, detail="Memory service not available")
+        
+        # Export memory
+        export_data = await letta_adapter.export_memory(
+            format=format,
+            include_metadata=include_metadata
+        )
+        
+        # Check for errors
+        if isinstance(export_data, dict) and "error" in export_data:
+            raise HTTPException(status_code=500, detail=export_data["error"])
+        
+        # Prepare response based on format
+        if format == "json":
+            # Convert dict to JSON string
+            content = json.dumps(export_data, indent=2, default=str)
+            media_type = "application/json"
+            filename = f"{matter.slug}_memory_export.json"
+        elif format == "csv":
+            # Content is already a CSV string
+            content = export_data
+            media_type = "text/csv"
+            filename = f"{matter.slug}_memory_export.csv"
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
+        
+        # Return as streaming response with download headers
+        return StreamingResponse(
+            io.BytesIO(content.encode('utf-8')),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to export memory: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to export memory: {str(e)}")
+
+
+@app.post("/api/matters/{matter_id}/memory/import")
+async def import_memory(
+    matter_id: str,
+    file: UploadFile = File(...),
+    format: str = Query("json", description="Import format (json or csv)"),
+    deduplicate: bool = Query(True, description="Check for duplicates")
+):
+    """
+    Import memory from uploaded file.
+    
+    Args:
+        matter_id: The matter ID
+        file: Uploaded file containing memory data
+        format: Import format (json or csv)
+        deduplicate: Whether to check for duplicates
+        
+    Returns:
+        Import statistics
+    """
+    try:
+        matter = get_matter(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter {matter_id} not found")
+        
+        # Get Letta adapter
+        letta_adapter = get_letta_adapter(matter)
+        if not letta_adapter:
+            raise HTTPException(status_code=503, detail="Memory service not available")
+        
+        # Read file content
+        content = await file.read()
+        
+        # Decode content
+        try:
+            data_str = content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="File must be UTF-8 encoded")
+        
+        # Parse data based on format
+        if format == "json":
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+        elif format == "csv":
+            # Pass CSV string directly
+            data = data_str
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
+        
+        # Import memory
+        result = await letta_adapter.import_memory(
+            data=data,
+            format=format,
+            deduplicate=deduplicate
+        )
+        
+        # Check for errors
+        if "error" in result:
+            # Still return the partial results if some imports succeeded
+            if result.get("imported", 0) > 0:
+                logger.warning(f"Partial import success: {result}")
+                return result
+            else:
+                raise HTTPException(status_code=500, detail=result["error"])
+        
+        logger.info(
+            "Memory import completed",
+            matter_id=matter_id,
+            filename=file.filename,
+            imported=result.get("imported", 0),
+            skipped=result.get("skipped", 0)
+        )
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to import memory: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to import memory: {str(e)}")
 
 
 # Health check endpoint

@@ -102,6 +102,18 @@ class MemoryViewer:
                         ).props('color=primary').classes('hidden')
                     
                     with ui.row().classes('items-center gap-2'):
+                        # Export button
+                        ui.button(
+                            'Export',
+                            icon='download',
+                            on_click=self._show_export_dialog
+                        ).props('outline').tooltip('Export memories to file')
+                        # Import button
+                        ui.button(
+                            'Import',
+                            icon='upload',
+                            on_click=self._show_import_dialog
+                        ).props('outline').tooltip('Import memories from file')
                         # Analytics button
                         ui.button(
                             'Analytics',
@@ -738,6 +750,170 @@ class MemoryViewer:
         
         # Show the dialog
         analytics_dialog.open()
+    
+    async def _show_export_dialog(self):
+        """Show export dialog for memory export options."""
+        if not self.api_client or not self.current_matter_id:
+            ui.notify("Cannot export: No matter selected", type="warning")
+            return
+        
+        # Create export dialog
+        export_dialog = ui.dialog()
+        
+        with export_dialog, ui.card().classes('w-96'):
+            ui.label('Export Memory').classes('text-lg font-bold mb-4')
+            
+            # Format selector
+            format_select = ui.select(
+                label='Export Format',
+                options={'json': 'JSON', 'csv': 'CSV'},
+                value='json'
+            ).classes('w-full mb-4')
+            
+            # Include metadata checkbox
+            include_metadata = ui.checkbox(
+                'Include metadata (IDs, timestamps)',
+                value=True
+            ).classes('mb-4')
+            
+            # Buttons
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancel', on_click=export_dialog.close).props('outline')
+                
+                async def export():
+                    try:
+                        export_dialog.close()
+                        
+                        # Show loading notification
+                        loading_notif = ui.notify('Exporting memories...', type='ongoing')
+                        
+                        # Export memory
+                        content = await self.api_client.export_memory(
+                            matter_id=self.current_matter_id,
+                            format=format_select.value,
+                            include_metadata=include_metadata.value
+                        )
+                        
+                        # Generate filename
+                        filename = f"memory_export_{self.current_matter_id}.{format_select.value}"
+                        
+                        # Trigger download using JavaScript
+                        from nicegui import app
+                        ui.run_javascript(f'''
+                            const blob = new Blob([{repr(content.decode('utf-8'))}], 
+                                {{type: '{("application/json" if format_select.value == "json" else "text/csv")}'}});
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = '{filename}';
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                            document.body.removeChild(a);
+                        ''')
+                        
+                        loading_notif.dismiss()
+                        ui.notify(f'Memory exported to {filename}', type='positive')
+                        
+                    except Exception as e:
+                        logger.error(f"Export failed: {str(e)}")
+                        ui.notify(f'Export failed: {str(e)}', type='negative')
+                
+                ui.button('Export', on_click=export).props('color=primary')
+        
+        export_dialog.open()
+    
+    async def _show_import_dialog(self):
+        """Show import dialog for memory import."""
+        if not self.api_client or not self.current_matter_id:
+            ui.notify("Cannot import: No matter selected", type="warning")
+            return
+        
+        # Create import dialog
+        import_dialog = ui.dialog()
+        uploaded_file = {'content': None, 'name': None}
+        
+        with import_dialog, ui.card().classes('w-96'):
+            ui.label('Import Memory').classes('text-lg font-bold mb-4')
+            
+            # File upload
+            async def handle_upload(e):
+                uploaded_file['content'] = e.content.read()
+                uploaded_file['name'] = e.name
+                file_label.set_text(f'Selected: {e.name}')
+                import_button.enable()
+            
+            ui.upload(
+                label='Select memory file',
+                on_upload=handle_upload,
+                auto_upload=True
+            ).classes('w-full mb-4').props('accept=".json,.csv"')
+            
+            file_label = ui.label('No file selected').classes('text-sm text-gray-600 mb-4')
+            
+            # Format selector
+            format_select = ui.select(
+                label='Import Format',
+                options={'json': 'JSON', 'csv': 'CSV'},
+                value='json'
+            ).classes('w-full mb-4')
+            
+            # Deduplicate checkbox
+            deduplicate = ui.checkbox(
+                'Skip duplicate memories',
+                value=True
+            ).classes('mb-4')
+            
+            # Buttons
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancel', on_click=import_dialog.close).props('outline')
+                
+                async def import_memory():
+                    try:
+                        if not uploaded_file['content']:
+                            ui.notify('Please select a file', type='warning')
+                            return
+                        
+                        import_dialog.close()
+                        
+                        # Show loading notification
+                        loading_notif = ui.notify('Importing memories...', type='ongoing')
+                        
+                        # Import memory
+                        result = await self.api_client.import_memory(
+                            matter_id=self.current_matter_id,
+                            file_content=uploaded_file['content'],
+                            filename=uploaded_file['name'],
+                            format=format_select.value,
+                            deduplicate=deduplicate.value
+                        )
+                        
+                        loading_notif.dismiss()
+                        
+                        # Show results
+                        imported = result.get('imported', 0)
+                        skipped = result.get('skipped', 0)
+                        total = result.get('total', 0)
+                        
+                        if 'error' in result and imported == 0:
+                            ui.notify(f"Import failed: {result['error']}", type='negative')
+                        else:
+                            message = f"Imported {imported} memories"
+                            if skipped > 0:
+                                message += f" (skipped {skipped} duplicates)"
+                            ui.notify(message, type='positive')
+                            
+                            # Refresh the memory list
+                            await self._load_memories()
+                        
+                    except Exception as e:
+                        logger.error(f"Import failed: {str(e)}")
+                        ui.notify(f'Import failed: {str(e)}', type='negative')
+                
+                import_button = ui.button('Import', on_click=import_memory).props('color=primary')
+                import_button.disable()  # Initially disabled until file selected
+        
+        import_dialog.open()
     
     async def _show_create_dialog(self):
         """Show the memory editor dialog in create mode."""

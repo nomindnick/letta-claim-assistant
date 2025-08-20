@@ -669,6 +669,87 @@ class APIClient:
             logger.error("Failed to get memory analytics", error=str(e))
             raise
     
+    async def export_memory(
+        self,
+        matter_id: str,
+        format: str = "json",
+        include_metadata: bool = True
+    ) -> bytes:
+        """
+        Export memory to file.
+        
+        Args:
+            matter_id: The matter ID
+            format: Export format (json or csv)
+            include_metadata: Whether to include metadata
+            
+        Returns:
+            File content as bytes
+        """
+        session = await self._get_session()
+        try:
+            params = {
+                "format": format,
+                "include_metadata": include_metadata
+            }
+            async with session.get(
+                f"{self.base_url}/api/matters/{matter_id}/memory/export",
+                params=params
+            ) as response:
+                response.raise_for_status()
+                return await response.read()
+        except Exception as e:
+            logger.error("Failed to export memory", error=str(e))
+            raise
+    
+    async def import_memory(
+        self,
+        matter_id: str,
+        file_content: bytes,
+        filename: str,
+        format: str = "json",
+        deduplicate: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Import memory from file.
+        
+        Args:
+            matter_id: The matter ID
+            file_content: File content as bytes
+            filename: Original filename
+            format: Import format (json or csv)
+            deduplicate: Whether to check for duplicates
+            
+        Returns:
+            Import statistics
+        """
+        session = await self._get_session()
+        try:
+            # Create form data
+            data = aiohttp.FormData()
+            data.add_field(
+                'file',
+                file_content,
+                filename=filename,
+                content_type='application/json' if format == 'json' else 'text/csv'
+            )
+            
+            params = {
+                "format": format,
+                "deduplicate": deduplicate
+            }
+            
+            async with session.post(
+                f"{self.base_url}/api/matters/{matter_id}/memory/import",
+                data=data,
+                params=params
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to import memory", error=str(e))
+            raise
+    
     # Health Check
     async def health_check(self) -> bool:
         """Check if backend API is healthy."""

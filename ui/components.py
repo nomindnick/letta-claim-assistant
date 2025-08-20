@@ -69,7 +69,6 @@ class SkeletonLoader:
                 with ui.row().classes('w-full justify-between items-center mt-4'):
                     ui.skeleton().classes('h-3 w-24')  # Source
                     ui.skeleton().classes('h-8 w-20 rounded')  # Action button
-                        ui.skeleton().classes('h-3 w-1/4')
         return skeleton
     
     @staticmethod
