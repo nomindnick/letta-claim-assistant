@@ -507,3 +507,52 @@ class MemoryItem(BaseModel):
         json_encoders = {
             datetime: lambda v: v.isoformat()
         }
+
+
+class CreateMemoryItemRequest(BaseModel):
+    """Request model for creating a memory item."""
+    
+    text: str = Field(..., min_length=1, description="The memory text content")
+    type: Literal["Entity", "Event", "Issue", "Fact", "Interaction", "Raw"] = Field(
+        default="Raw",
+        description="Type of memory item"
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional metadata for the memory item"
+    )
+    
+    @field_validator('text')
+    @classmethod
+    def validate_text_not_empty(cls, v):
+        """Ensure text is not just whitespace."""
+        if not v.strip():
+            raise ValueError("Text cannot be empty or only whitespace")
+        return v
+
+
+class UpdateMemoryItemRequest(BaseModel):
+    """Request model for updating a memory item."""
+    
+    new_text: str = Field(..., min_length=1, description="The new text content")
+    preserve_type: bool = Field(
+        default=True,
+        description="Whether to preserve the original type and metadata"
+    )
+    
+    @field_validator('new_text')
+    @classmethod
+    def validate_text_not_empty(cls, v):
+        """Ensure text is not just whitespace."""
+        if not v.strip():
+            raise ValueError("Text cannot be empty or only whitespace")
+        return v
+
+
+class MemoryOperationResponse(BaseModel):
+    """Response model for memory operations."""
+    
+    success: bool = Field(..., description="Whether the operation succeeded")
+    item_id: Optional[str] = Field(None, description="ID of the affected memory item")
+    message: str = Field(..., description="Operation result message")
+    error: Optional[str] = Field(None, description="Error message if operation failed")

@@ -42,6 +42,7 @@ except ImportError:
 
 from .logging_conf import get_logger
 from .models import KnowledgeItem, SourceChunk
+from .matters import matter_manager
 from .letta_server import server_manager
 from .letta_config import config_manager, LettaAgentConfig
 from .letta_connection import connection_manager, ConnectionState
@@ -2409,6 +2410,305 @@ Return only the questions, one per line."""
                 matter_id=self.matter_id
             )
             return None
+    
+    async def create_memory_item(
+        self,
+        text: str,
+        type: str = "Raw",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Create a new memory item.
+        
+        Args:
+            text: The memory text content
+            type: Memory type (Entity, Event, Issue, Fact, Interaction, Raw)
+            metadata: Optional metadata to include
+            
+        Returns:
+            The created passage ID
+            
+        Raises:
+            Exception: If creation fails
+        """
+        from .models import KnowledgeItem
+        
+        try:
+            # Format as KnowledgeItem if type is not Raw
+            if type != "Raw" and type in ["Entity", "Event", "Issue", "Fact"]:
+                item = KnowledgeItem(
+                    type=type,
+                    label=text[:100],  # Use first 100 chars as label
+                    support_snippet=text if len(text) <= 300 else text[:300],
+                    doc_refs=[metadata] if metadata else []
+                )
+                formatted_text = item.model_dump_json()
+            else:
+                # For Raw or Interaction types, store as-is or with minimal formatting
+                if metadata:
+                    formatted_text = json.dumps({
+                        "type": type,
+                        "content": text,
+                        "metadata": metadata
+                    })
+                else:
+                    formatted_text = text
+            
+            # Create the passage
+            passage = await self.client.agents.passages.create(
+                agent_id=self.agent_id,
+                text=formatted_text
+            )
+            
+            logger.info(
+                "Created memory item",
+                passage_id=passage.id,
+                type=type,
+                matter_id=self.matter_id
+            )
+            
+            # Log audit event
+            await self._log_memory_audit(
+                operation="create",
+                item_id=passage.id,
+                item_type=type,
+                content_preview=text[:100]
+            )
+            
+            return passage.id
+            
+        except Exception as e:
+            logger.error(
+                "Failed to create memory item",
+                error=str(e),
+                type=type,
+                matter_id=self.matter_id
+            )
+            raise
+    
+    async def update_memory_item(
+        self,
+        item_id: str,
+        new_text: str,
+        preserve_type: bool = True
+    ) -> str:
+        """
+        Update a memory item by deleting and recreating it.
+        Since Letta doesn't have an update API, we delete and recreate.
+        
+        Args:
+            item_id: The passage ID to update
+            new_text: The new text content
+            preserve_type: Whether to preserve the original type
+            
+        Returns:
+            The new passage ID
+            
+        Raises:
+            Exception: If update fails
+        """
+        try:
+            # First, get the existing item to preserve metadata
+            existing_item = await self.get_memory_item(item_id)
+            if not existing_item:
+                raise ValueError(f"Memory item not found: {item_id}")
+            
+            # Backup before deletion
+            await self._backup_memory_item(existing_item)
+            
+            # Delete the old passage
+            try:
+                await self.client.agents.passages.delete(
+                    agent_id=self.agent_id,
+                    passage_id=item_id
+                )
+            except Exception as e:
+                logger.warning(f"Failed to delete old passage during update: {e}")
+            
+            # Determine type and metadata from existing item
+            item_type = existing_item.type if preserve_type else "Raw"
+            metadata = existing_item.metadata if preserve_type else {}
+            
+            # Create new passage with updated text
+            new_id = await self.create_memory_item(
+                text=new_text,
+                type=item_type,
+                metadata=metadata
+            )
+            
+            logger.info(
+                "Updated memory item",
+                old_id=item_id,
+                new_id=new_id,
+                matter_id=self.matter_id
+            )
+            
+            # Log audit event
+            await self._log_memory_audit(
+                operation="update",
+                item_id=item_id,
+                new_item_id=new_id,
+                content_preview=new_text[:100]
+            )
+            
+            return new_id
+            
+        except Exception as e:
+            logger.error(
+                "Failed to update memory item",
+                item_id=item_id,
+                error=str(e),
+                matter_id=self.matter_id
+            )
+            raise
+    
+    async def delete_memory_item(self, item_id: str) -> bool:
+        """
+        Delete a memory item.
+        
+        Args:
+            item_id: The passage ID to delete
+            
+        Returns:
+            True if deleted successfully
+            
+        Raises:
+            Exception: If deletion fails
+        """
+        try:
+            # Get item for backup before deletion
+            existing_item = await self.get_memory_item(item_id)
+            if existing_item:
+                await self._backup_memory_item(existing_item)
+            
+            # Delete the passage
+            await self.client.agents.passages.delete(
+                agent_id=self.agent_id,
+                passage_id=item_id
+            )
+            
+            logger.info(
+                "Deleted memory item",
+                item_id=item_id,
+                matter_id=self.matter_id
+            )
+            
+            # Log audit event
+            await self._log_memory_audit(
+                operation="delete",
+                item_id=item_id,
+                content_preview=existing_item.text[:100] if existing_item else "Unknown"
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(
+                "Failed to delete memory item",
+                item_id=item_id,
+                error=str(e),
+                matter_id=self.matter_id
+            )
+            raise
+    
+    async def _backup_memory_item(self, item: "MemoryItem") -> None:
+        """
+        Backup a memory item before deletion or update.
+        
+        Args:
+            item: The memory item to backup
+        """
+        try:
+            # Create backup directory if it doesn't exist
+            matter = matter_manager.get_matter_by_id(self.matter_id)
+            backup_dir = matter.paths.root / "backups"
+            backup_dir.mkdir(exist_ok=True)
+            
+            # Load or create backup file
+            backup_file = backup_dir / "deleted_memories.json"
+            if backup_file.exists():
+                with open(backup_file, 'r') as f:
+                    backups = json.load(f)
+            else:
+                backups = []
+            
+            # Add this item to backups
+            backup_entry = {
+                "id": item.id,
+                "text": item.text,
+                "type": item.type,
+                "metadata": item.metadata,
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+                "deleted_at": datetime.now().isoformat(),
+                "source": item.source
+            }
+            backups.append(backup_entry)
+            
+            # Save updated backups
+            with open(backup_file, 'w') as f:
+                json.dump(backups, f, indent=2)
+                
+            logger.debug(
+                "Backed up memory item",
+                item_id=item.id,
+                backup_file=str(backup_file)
+            )
+            
+        except Exception as e:
+            logger.warning(
+                "Failed to backup memory item",
+                item_id=item.id,
+                error=str(e)
+            )
+    
+    async def _log_memory_audit(
+        self,
+        operation: str,
+        item_id: str,
+        **kwargs
+    ) -> None:
+        """
+        Log memory operation to audit log.
+        
+        Args:
+            operation: Type of operation (create, update, delete)
+            item_id: ID of the memory item
+            **kwargs: Additional audit data
+        """
+        try:
+            # Create logs directory if it doesn't exist
+            matter = matter_manager.get_matter_by_id(self.matter_id)
+            logs_dir = matter.paths.root / "logs"
+            logs_dir.mkdir(exist_ok=True)
+            
+            # Create or append to audit log
+            audit_file = logs_dir / "memory_audit.log"
+            
+            audit_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "operation": operation,
+                "item_id": item_id,
+                "matter_id": self.matter_id,
+                **kwargs
+            }
+            
+            # Append to audit log
+            with open(audit_file, 'a') as f:
+                f.write(json.dumps(audit_entry) + '\n')
+            
+            logger.debug(
+                "Logged memory audit event",
+                operation=operation,
+                item_id=item_id
+            )
+            
+        except Exception as e:
+            logger.warning(
+                "Failed to log memory audit",
+                operation=operation,
+                item_id=item_id,
+                error=str(e)
+            )
     
     async def validate_california_claim(
         self,

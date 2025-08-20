@@ -19,7 +19,8 @@ from datetime import datetime
 from .models import (
     CreateMatterRequest, CreateMatterResponse, MatterSummary,
     ChatRequest, ChatResponse, JobStatus, DocumentInfo,
-    QualityInsights, RetrievalWeights
+    QualityInsights, RetrievalWeights,
+    CreateMemoryItemRequest, UpdateMemoryItemRequest, MemoryOperationResponse
 )
 from .logging_conf import get_logger
 from .matters import matter_manager
@@ -1744,6 +1745,146 @@ async def get_memory_item(matter_id: str, item_id: str):
     except Exception as e:
         logger.error(f"Failed to get memory item: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get memory item: {str(e)}")
+
+
+@app.post("/api/matters/{matter_id}/memory/items")
+async def create_memory_item(
+    matter_id: str,
+    request: CreateMemoryItemRequest
+):
+    """Create a new memory item."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_id=matter_id,
+            matter_manager=matter_manager,
+            model_provider=model_manager.get_provider(matter.generation_model)
+        )
+        
+        # Create the memory item
+        item_id = await letta_adapter.create_memory_item(
+            text=request.text,
+            type=request.type,
+            metadata=request.metadata
+        )
+        
+        return MemoryOperationResponse(
+            success=True,
+            item_id=item_id,
+            message=f"Successfully created memory item of type {request.type}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create memory item: {str(e)}", exc_info=True)
+        return MemoryOperationResponse(
+            success=False,
+            item_id=None,
+            message="Failed to create memory item",
+            error=str(e)
+        )
+
+
+@app.put("/api/matters/{matter_id}/memory/items/{item_id}")
+async def update_memory_item(
+    matter_id: str,
+    item_id: str,
+    request: UpdateMemoryItemRequest
+):
+    """Update an existing memory item."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_id=matter_id,
+            matter_manager=matter_manager,
+            model_provider=model_manager.get_provider(matter.generation_model)
+        )
+        
+        # Update the memory item
+        new_id = await letta_adapter.update_memory_item(
+            item_id=item_id,
+            new_text=request.new_text,
+            preserve_type=request.preserve_type
+        )
+        
+        return MemoryOperationResponse(
+            success=True,
+            item_id=new_id,
+            message=f"Successfully updated memory item. New ID: {new_id}"
+        )
+        
+    except ValueError as e:
+        # Memory item not found
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update memory item: {str(e)}", exc_info=True)
+        return MemoryOperationResponse(
+            success=False,
+            item_id=item_id,
+            message="Failed to update memory item",
+            error=str(e)
+        )
+
+
+@app.delete("/api/matters/{matter_id}/memory/items/{item_id}")
+async def delete_memory_item(matter_id: str, item_id: str):
+    """Delete a memory item."""
+    try:
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_id=matter_id,
+            matter_manager=matter_manager,
+            model_provider=model_manager.get_provider(matter.generation_model)
+        )
+        
+        # Delete the memory item
+        success = await letta_adapter.delete_memory_item(item_id)
+        
+        if success:
+            return MemoryOperationResponse(
+                success=True,
+                item_id=item_id,
+                message=f"Successfully deleted memory item {item_id}"
+            )
+        else:
+            return MemoryOperationResponse(
+                success=False,
+                item_id=item_id,
+                message="Failed to delete memory item",
+                error="Deletion failed"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete memory item: {str(e)}", exc_info=True)
+        return MemoryOperationResponse(
+            success=False,
+            item_id=item_id,
+            message="Failed to delete memory item",
+            error=str(e)
+        )
 
 
 # Health check endpoint
