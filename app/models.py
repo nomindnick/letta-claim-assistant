@@ -585,3 +585,39 @@ class MemoryCommandResponse(BaseModel):
     item_id: Optional[str] = Field(None, description="ID of affected memory item")
     undo_token: Optional[str] = Field(None, description="Token for undoing this operation")
     suggestion: Optional[str] = Field(None, description="Suggested command format if parsing failed")
+
+
+class MemoryPattern(BaseModel):
+    """Pattern identified in memory analysis."""
+    
+    type: str = Field(..., description="Type of pattern (e.g., 'dominant_memory_type', 'key_actors')")
+    value: Optional[Any] = Field(None, description="Primary value of the pattern")
+    count: Optional[int] = Field(None, description="Count or frequency")
+    percentage: Optional[float] = Field(None, description="Percentage if applicable")
+    actors: Optional[List[Dict[str, Any]]] = Field(None, description="Actor data if pattern involves actors")
+    documents: Optional[List[Dict[str, Any]]] = Field(None, description="Document data if pattern involves documents")
+    month: Optional[str] = Field(None, description="Month data for temporal patterns")
+
+
+class MemoryInsight(BaseModel):
+    """Insight derived from memory analysis."""
+    
+    insight: str = Field(..., description="Type of insight")
+    score: Optional[float] = Field(None, description="Score or value")
+    rate: Optional[float] = Field(None, description="Rate if applicable")
+    avg_connections: Optional[float] = Field(None, description="Average connections for network analysis")
+    interpretation: str = Field(..., description="Human-readable interpretation")
+
+
+class MemoryAnalytics(BaseModel):
+    """Comprehensive memory analytics response."""
+    
+    total_memories: int = Field(..., description="Total number of memory items")
+    patterns: List[MemoryPattern] = Field(default_factory=list, description="Identified patterns")
+    insights: List[MemoryInsight] = Field(default_factory=list, description="Derived insights")
+    type_distribution: Dict[str, int] = Field(default_factory=dict, description="Distribution by memory type")
+    actor_network: Dict[str, int] = Field(default_factory=dict, description="Top actors and their mention counts")
+    temporal_distribution: Dict[str, int] = Field(default_factory=dict, description="Memory distribution over time")
+    quality_metrics: Optional[Dict[str, float]] = Field(None, description="Quality metrics if available")
+    growth_timeline: Optional[List[Dict[str, Any]]] = Field(None, description="Memory growth over time")
+    error: Optional[str] = Field(None, description="Error message if analytics failed")

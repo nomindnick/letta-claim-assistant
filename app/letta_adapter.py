@@ -2382,7 +2382,8 @@ Provide a comprehensive answer based on what you remember about this matter. If 
         limit: int = 50,
         offset: int = 0,
         type_filter: Optional[str] = None,
-        search_query: Optional[str] = None
+        search_query: Optional[str] = None,
+        search_type: Optional[str] = "semantic"
     ) -> List["MemoryItem"]:
         """
         Get memory items as structured objects with pagination and filtering.
@@ -2403,48 +2404,62 @@ Provide a comprehensive answer based on what you remember about this matter. If 
             return []
         
         try:
-            # Fetch passages from Letta
-            # When filtering by type, we need to fetch more items since we'll filter some out
-            # This is a workaround since Letta doesn't support server-side type filtering
-            if type_filter:
-                # Fetch more items to account for filtering
-                fetch_limit = (limit + offset) * 5  # Fetch 5x to ensure we get enough after filtering
+            # If search query is provided with specific search type, use search_memories
+            if search_query and search_type and search_type != "semantic":
+                # Use the enhanced search_memories method for non-semantic searches
+                all_memory_items = await self.search_memories(
+                    query=search_query,
+                    limit=min((limit + offset) * 2, 1000),  # Get more for pagination
+                    search_type=search_type.lower()
+                )
             else:
-                fetch_limit = limit + offset if offset > 0 else limit
+                # Fetch passages from Letta
+                # When filtering by type, we need to fetch more items since we'll filter some out
+                # This is a workaround since Letta doesn't support server-side type filtering
+                if type_filter:
+                    # Fetch more items to account for filtering
+                    fetch_limit = (limit + offset) * 5  # Fetch 5x to ensure we get enough after filtering
+                else:
+                    fetch_limit = limit + offset if offset > 0 else limit
+                
+                passages = await self.client.agents.passages.list(
+                    agent_id=self.agent_id,
+                    search=search_query,
+                    limit=min(fetch_limit, 1000)  # Cap at 1000 to avoid too large requests
+                )
+                
+                if not passages:
+                    return []
+                
+                # Convert passages to MemoryItem objects
+                all_memory_items = []
+                for passage in passages:
+                    try:
+                        item = MemoryItem.from_passage(passage)
+                        all_memory_items.append(item)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to parse passage as MemoryItem",
+                            passage_id=getattr(passage, 'id', 'unknown'),
+                            error=str(e)
+                        )
             
-            passages = await self.client.agents.passages.list(
-                agent_id=self.agent_id,
-                search=search_query,
-                limit=min(fetch_limit, 1000)  # Cap at 1000 to avoid too large requests
-            )
-            
-            if not passages:
-                return []
-            
-            # Convert passages to MemoryItem objects and apply type filter
-            all_memory_items = []
-            for passage in passages:
-                try:
-                    item = MemoryItem.from_passage(passage)
-                    
-                    # Apply type filter if specified
-                    if type_filter and item.type != type_filter:
-                        continue
-                    
-                    all_memory_items.append(item)
-                except Exception as e:
-                    logger.warning(
-                        "Failed to parse passage as MemoryItem",
-                        passage_id=getattr(passage, 'id', 'unknown'),
-                        error=str(e)
-                    )
+            # Apply type filter if specified
+            if type_filter:
+                all_memory_items = [
+                    item for item in all_memory_items 
+                    if item.type == type_filter
+                ]
             
             # Apply offset and limit to the filtered results
             memory_items = all_memory_items[offset:offset + limit]
             
+            # For logging, determine how many items were fetched
+            total_fetched = len(all_memory_items) if all_memory_items else 0
+            
             logger.info(
                 "Retrieved memory items",
-                total_fetched=len(passages) if passages else 0,
+                total_fetched=total_fetched,
                 filtered_count=len(memory_items),
                 type_filter=type_filter,
                 has_search=bool(search_query)
@@ -2728,7 +2743,7 @@ Provide a comprehensive answer based on what you remember about this matter. If 
         Args:
             query: The search query
             limit: Maximum number of results
-            search_type: Type of search ("semantic", "keyword", or "exact")
+            search_type: Type of search ("semantic", "keyword", "exact", or "regex")
             
         Returns:
             List of matching memory items
@@ -2737,6 +2752,16 @@ Provide a comprehensive answer based on what you remember about this matter. If 
         
         if self.fallback_mode:
             return []
+        
+        # Simple in-memory cache for frequent queries
+        cache_key = f"{query}:{search_type}:{limit}"
+        if hasattr(self, '_search_cache'):
+            cached_result = self._search_cache.get(cache_key)
+            if cached_result and (datetime.now() - cached_result['time']).seconds < 300:  # 5 min TTL
+                logger.debug("Returning cached search results", query=query)
+                return cached_result['data']
+        else:
+            self._search_cache = {}
         
         try:
             if search_type == "semantic":
@@ -2747,7 +2772,7 @@ Provide a comprehensive answer based on what you remember about this matter. If 
                     limit=limit
                 )
             else:
-                # For keyword/exact search, get all and filter
+                # For keyword/exact/regex search, get all and filter
                 passages = await self.client.agents.passages.list(
                     agent_id=self.agent_id,
                     limit=1000  # Get more for local filtering
@@ -2755,33 +2780,65 @@ Provide a comprehensive answer based on what you remember about this matter. If 
                 
                 # Filter based on search type
                 matching = []
-                query_lower = query.lower()
                 
-                for passage in passages:
-                    text_lower = passage.text.lower()
+                if search_type == "regex":
+                    # Regex search
+                    import re
+                    try:
+                        pattern = re.compile(query, re.IGNORECASE)
+                        for passage in passages:
+                            if pattern.search(passage.text):
+                                matching.append(passage)
+                                if len(matching) >= limit:
+                                    break
+                    except re.error as e:
+                        logger.error(f"Invalid regex pattern: {query}", error=str(e))
+                        return []
+                else:
+                    query_lower = query.lower()
                     
-                    if search_type == "exact":
-                        if query_lower in text_lower:
-                            matching.append(passage)
-                    elif search_type == "keyword":
-                        # Check if all keywords are present
-                        keywords = query_lower.split()
-                        if all(keyword in text_lower for keyword in keywords):
-                            matching.append(passage)
-                    
-                    if len(matching) >= limit:
-                        break
+                    for passage in passages:
+                        text_lower = passage.text.lower()
+                        
+                        if search_type == "exact":
+                            if query_lower in text_lower:
+                                matching.append(passage)
+                        elif search_type == "keyword":
+                            # Check if all keywords are present
+                            keywords = query_lower.split()
+                            if all(keyword in text_lower for keyword in keywords):
+                                matching.append(passage)
+                        
+                        if len(matching) >= limit:
+                            break
                 
                 passages = matching[:limit]
             
             # Convert to MemoryItem objects
             from .models import MemoryItem
-            return [MemoryItem.from_passage(p) for p in passages]
+            results = [MemoryItem.from_passage(p) for p in passages]
+            
+            # Cache the results
+            self._search_cache[cache_key] = {
+                'time': datetime.now(),
+                'data': results
+            }
+            
+            # Clean old cache entries
+            if len(self._search_cache) > 100:
+                now = datetime.now()
+                self._search_cache = {
+                    k: v for k, v in self._search_cache.items()
+                    if (now - v['time']).seconds < 300
+                }
+            
+            return results
             
         except Exception as e:
             logger.error(
                 "Failed to search memories",
                 query=query,
+                search_type=search_type,
                 error=str(e),
                 matter_id=self.matter_id
             )

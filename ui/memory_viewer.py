@@ -17,6 +17,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from app.logging_conf import get_logger
 from .memory_editor import MemoryEditor
+from .memory_analytics import MemoryAnalyticsDashboard
 
 logger = get_logger(__name__)
 
@@ -89,6 +90,12 @@ class MemoryViewer:
                         ).props('color=primary').classes('hidden')
                     
                     with ui.row().classes('items-center gap-2'):
+                        # Analytics button
+                        ui.button(
+                            'Analytics',
+                            icon='analytics',
+                            on_click=self._show_analytics
+                        ).props('outline')
                         # Edit mode toggle
                         self.edit_mode_button = ui.button(
                             'Edit Mode',
@@ -97,8 +104,15 @@ class MemoryViewer:
                         ).props('outline')
                         ui.button(icon='close', on_click=self.dialog.close).props('flat round')
                 
-                # Search bar
+                # Search bar with advanced options
                 with ui.row().classes('w-full mb-4'):
+                    # Search type selector
+                    self.search_type = ui.select(
+                        ['Semantic', 'Keyword', 'Exact', 'Regex'],
+                        value='Semantic',
+                        label='Search Type'
+                    ).props('outlined dense').classes('w-32')
+                    
                     self.search_input = ui.input(
                         placeholder='Search memories...',
                         on_change=self._on_search_change
@@ -110,6 +124,14 @@ class MemoryViewer:
                         icon='search',
                         on_click=self._perform_search
                     ).props('color=primary')
+                    
+                    # Advanced search help
+                    with ui.button(icon='help_outline').props('flat round size=sm'):
+                        ui.tooltip('''Search Types:
+• Semantic: AI-powered meaning-based search
+• Keyword: All words must be present
+• Exact: Exact phrase match
+• Regex: Regular expression pattern''')
                 
                 # Type filter tabs (just visual indicators, not panels)
                 with ui.tabs().classes('w-full') as self.type_tabs:
@@ -184,14 +206,20 @@ class MemoryViewer:
             # Calculate offset
             offset = self.current_page * self.items_per_page
             
+            # Get search type from UI selector
+            search_type = "semantic"  # Default
+            if hasattr(self, 'search_type') and self.search_type:
+                search_type = self.search_type.value.lower()
+            
             # Fetch memory items
-            logger.info(f"Loading items - filter: {self.current_filter}, search: {self.current_search}, offset: {offset}")
+            logger.info(f"Loading items - filter: {self.current_filter}, search: {self.current_search}, search_type: {search_type}, offset: {offset}")
             result = await self.api_client.get_memory_items(
                 matter_id=self.current_matter_id,
                 limit=self.items_per_page,
                 offset=offset,
                 type_filter=self.current_filter,
-                search_query=self.current_search if self.current_search else None
+                search_query=self.current_search if self.current_search else None,
+                search_type=search_type
             )
             
             self.memory_items = result.get('items', [])
@@ -534,6 +562,31 @@ class MemoryViewer:
                         element.action_container.classes(remove='hidden')
                     else:
                         element.action_container.classes(add='hidden')
+    
+    async def _show_analytics(self):
+        """Show the memory analytics dashboard."""
+        if not self.api_client or not self.current_matter_id:
+            ui.notify("Cannot show analytics: No matter selected", type="warning")
+            return
+        
+        # Create analytics dialog
+        with ui.dialog() as analytics_dialog:
+            # Create analytics dashboard
+            analytics_dashboard = MemoryAnalyticsDashboard(
+                api_client=self.api_client,
+                matter_id=self.current_matter_id
+            )
+            
+            with ui.card().classes('w-full max-w-7xl h-5/6 overflow-auto'):
+                # Add close button in top right
+                with ui.row().classes('w-full justify-end mb-2'):
+                    ui.button(icon='close', on_click=analytics_dialog.close).props('flat round')
+                
+                # Create the dashboard
+                analytics_dashboard.create()
+        
+        # Show the dialog
+        analytics_dialog.open()
     
     async def _show_create_dialog(self):
         """Show the memory editor dialog in create mode."""

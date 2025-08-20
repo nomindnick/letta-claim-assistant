@@ -1661,7 +1661,8 @@ async def get_memory_items(
     limit: int = Query(50, ge=1, le=1000, description="Maximum number of items to return"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
     type_filter: Optional[str] = Query(None, description="Filter by memory type (Entity, Event, Issue, Fact, Interaction, Raw)"),
-    search_query: Optional[str] = Query(None, description="Search query to filter memories")
+    search_query: Optional[str] = Query(None, description="Search query to filter memories"),
+    search_type: Optional[str] = Query("semantic", description="Search type: semantic, keyword, exact, or regex")
 ):
     """Get individual memory items with pagination and filtering."""
     try:
@@ -1683,7 +1684,8 @@ async def get_memory_items(
             limit=limit,
             offset=offset,
             type_filter=type_filter,
-            search_query=search_query
+            search_query=search_query,
+            search_type=search_type
         )
         
         # For better UX, try to get a rough total count
@@ -2035,6 +2037,101 @@ async def process_memory_command(matter_id: str, request: MemoryCommandRequest):
         return MemoryCommandResponse(
             success=False,
             message=f"Failed to process memory command: {str(e)}"
+        )
+
+
+@app.get("/api/matters/{matter_id}/memory/analytics")
+async def get_memory_analytics(matter_id: str):
+    """Get comprehensive memory analytics for a matter."""
+    try:
+        # Import models
+        from .models import MemoryAnalytics, MemoryPattern, MemoryInsight
+        
+        # Validate matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Get Letta adapter for this matter
+        from .letta_adapter import LettaAdapter
+        letta_adapter = LettaAdapter(
+            matter_path=matter.paths.root,
+            matter_name=matter.name,
+            matter_id=matter_id
+        )
+        
+        # Get analytics data from existing analyze_memory_patterns method
+        analytics_data = await letta_adapter.analyze_memory_patterns()
+        
+        # Check for errors
+        if "error" in analytics_data:
+            return MemoryAnalytics(
+                total_memories=0,
+                error=analytics_data["error"]
+            )
+        
+        # Get quality metrics if available
+        quality_metrics = None
+        try:
+            quality_metrics = await letta_adapter.get_memory_quality_metrics()
+        except:
+            pass  # Quality metrics are optional
+        
+        # Convert patterns to model format
+        patterns = []
+        for pattern in analytics_data.get("patterns", []):
+            pattern_model = MemoryPattern(
+                type=pattern.get("type"),
+                value=pattern.get("value"),
+                count=pattern.get("count"),
+                percentage=pattern.get("percentage"),
+                actors=pattern.get("actors"),
+                documents=pattern.get("documents"),
+                month=pattern.get("month")
+            )
+            patterns.append(pattern_model)
+        
+        # Convert insights to model format
+        insights = []
+        for insight in analytics_data.get("insights", []):
+            insight_model = MemoryInsight(
+                insight=insight.get("insight"),
+                score=insight.get("score"),
+                rate=insight.get("rate"),
+                avg_connections=insight.get("avg_connections"),
+                interpretation=insight.get("interpretation")
+            )
+            insights.append(insight_model)
+        
+        # Build growth timeline from temporal distribution
+        growth_timeline = []
+        temporal_dist = analytics_data.get("temporal_distribution", {})
+        if temporal_dist:
+            for month, count in sorted(temporal_dist.items()):
+                growth_timeline.append({
+                    "month": month,
+                    "count": count
+                })
+        
+        # Return analytics response
+        return MemoryAnalytics(
+            total_memories=analytics_data.get("total_memories", 0),
+            patterns=patterns,
+            insights=insights,
+            type_distribution=analytics_data.get("type_distribution", {}),
+            actor_network=analytics_data.get("actor_network", {}),
+            temporal_distribution=temporal_dist,
+            quality_metrics=quality_metrics,
+            growth_timeline=growth_timeline if growth_timeline else None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get memory analytics: {str(e)}", exc_info=True)
+        return MemoryAnalytics(
+            total_memories=0,
+            error=f"Failed to retrieve analytics: {str(e)}"
         )
 
 

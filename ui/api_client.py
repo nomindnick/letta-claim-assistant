@@ -484,14 +484,16 @@ class APIClient:
         limit: int = 50, 
         offset: int = 0,
         type_filter: Optional[str] = None,
-        search_query: Optional[str] = None
+        search_query: Optional[str] = None,
+        search_type: Optional[str] = "semantic"
     ) -> Dict[str, Any]:
         """Get memory items for a matter with pagination and filtering."""
         session = await self._get_session()
         try:
             params = {
                 "limit": limit,
-                "offset": offset
+                "offset": offset,
+                "search_type": search_type
             }
             if type_filter:
                 params["type_filter"] = type_filter
@@ -588,6 +590,19 @@ class APIClient:
                 return await response.json()
         except Exception as e:
             logger.error("Failed to delete memory item", item_id=item_id, error=str(e))
+            raise
+    
+    async def get_memory_analytics(self, matter_id: str) -> Dict[str, Any]:
+        """Get memory analytics for a matter."""
+        session = await self._get_session()
+        try:
+            async with session.get(
+                f"{self.base_url}/api/matters/{matter_id}/memory/analytics"
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to get memory analytics", error=str(e))
             raise
     
     # Health Check
