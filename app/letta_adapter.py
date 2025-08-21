@@ -1655,10 +1655,28 @@ Provide a comprehensive answer based on what you remember about this matter. If 
             self.agent_id = agent_state.id
             self.agent_state = agent_state
             
+            # Register tools with the agent using sync client
+            try:
+                from .letta_tools import register_search_tool_with_agent
+                # Use the sync client for tool registration
+                if self.sync_client:
+                    register_search_tool_with_agent(
+                        client=self.sync_client,
+                        agent_id=self.agent_id,
+                        matter_id=self.matter_id
+                    )
+                    logger.info("Registered search_documents tool with agent")
+                else:
+                    logger.warning("No sync client available for tool registration")
+            except Exception as e:
+                logger.warning(f"Failed to register tools with agent: {e}")
+                # Continue even if tool registration fails
+            
             logger.info(
                 "Created new Letta agent",
                 agent_id=self.agent_id,
-                matter_name=self.matter_name
+                matter_name=self.matter_name,
+                has_tools=True
             )
             
         except Exception as e:

@@ -215,7 +215,11 @@ When analyzing claims, you should:
 7. Consider both contractual and statutory remedies
 8. Evaluate government immunity and administrative procedures
 
-Remember that California public works projects have unique requirements that differ from private construction and federal projects. Always consider the interplay between contract provisions and statutory requirements."""
+Remember that California public works projects have unique requirements that differ from private construction and federal projects. Always consider the interplay between contract provisions and statutory requirements.
+
+You have access to the search_documents tool to search case documents when needed.
+Always cite sources using the format [DocName.pdf p.X] when referencing documents.
+Learn from each interaction and remember important facts about the case."""
     
     @staticmethod
     def get_memory_blocks(matter_name: str) -> List[Dict[str, str]]:

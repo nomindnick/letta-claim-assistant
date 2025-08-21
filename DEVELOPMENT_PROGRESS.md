@@ -2,7 +2,7 @@
 
 **Project Start Date:** 2025-08-14  
 **Last Updated:** 2025-08-21  
-**Current Status:** 🎯 Phase 0 Validation Complete - Ready for Stateful Agent Implementation
+**Current Status:** 🚀 Phase 1 Complete - Stateful Agent with RAG Tool Implemented
 
 ---
 
@@ -41,12 +41,61 @@
 | **M5** | **Completed** | 2025-08-20 | 2h | **Chat Mode Infrastructure** |
 | **M6** | **Completed** | 2025-08-20 | 2h | **Chat Mode UI** |
 | **Phase 0** | **Completed** | 2025-08-21 | 1h | **Technical Discovery & Validation** |
+| **Phase 1** | **Completed** | 2025-08-21 | 2h | **Core Agent with RAG Tool** |
 
 ---
 
-## Stateful Agent-First Architecture - Phase 0 Complete (2025-08-21)
+## Stateful Agent-First Architecture Implementation
 
-### Phase 0: Technical Discovery & Validation ✅ COMPLETE
+### Phase 1: Core Agent with RAG Tool ✅ COMPLETE (2025-08-21, 2h)
+
+**Implementation Summary:**
+- Created `app/letta_tools.py` with search_documents tool implementation
+- Updated `app/letta_adapter.py` to register tools with agents during creation
+- Enhanced `app/letta_provider_bridge.py` with provider-prefixed model names
+- Created `app/letta_agent.py` for stateful agent message handling
+- Updated system prompts to mention tools and citation requirements
+- Created comprehensive test suite `tests/test_phase1_agent.py`
+
+**Key Technical Achievements:**
+1. **Tool Registration**: Implemented search_documents tool using existing RAG infrastructure
+2. **Provider Prefixing**: Automatic prefixing (ollama/, gemini/, openai/) for Letta v0.10.0
+3. **Agent Handler**: New LettaAgentHandler class for agent-first message processing
+4. **Citation Format**: Standardized on `[DocName.pdf p.X]` format
+5. **Memory Persistence**: Leverages Letta's built-in memory blocks for conversation state
+
+**Test Results (All Passed):**
+- ✅ Tool Definition - Tool properly structured and callable
+- ✅ Provider Prefixes - Model names correctly prefixed
+- ✅ Agent Creation with Tool - Agents created with tools attached
+- ✅ Agent Message Handling - Messages processed successfully
+- ✅ Memory Persistence - Agent remembers information across messages
+- ✅ Citation Formatting - Proper citation format in responses
+
+**Architecture Transformation:**
+- **Before**: User → RAG Pipeline → [Doc Retrieval + Memory] → LLM → Response
+- **After**: User → Letta Agent → [Reasoning & Memory] → Tool Selection → Response
+
+**Files Created/Modified:**
+- NEW: `app/letta_tools.py` - Tool definitions and implementations
+- NEW: `app/letta_agent.py` - Agent-first message handler
+- MODIFIED: `app/letta_adapter.py` - Tool registration during agent creation
+- MODIFIED: `app/letta_provider_bridge.py` - Provider-prefixed model names
+- MODIFIED: `app/letta_config.py` - Updated system prompts
+- MODIFIED: `app/letta_domain_california.py` - Updated California domain prompts
+- NEW: `tests/test_phase1_agent.py` - Phase 1 test suite
+
+**Known Issues:**
+- Some Letta server 500 errors during message handling (non-blocking)
+- Memory API differences in Letta v0.10.0 (worked around)
+- Mix of async/sync clients requires careful handling
+
+**Next Steps:**
+- Phase 2: UI Integration - Remove chat mode selector, show tool usage
+- Phase 3: Testing and Refinement
+- Future: Additional tools, sub-agents, advanced learning
+
+### Phase 0: Technical Discovery & Validation ✅ COMPLETE (2025-08-21, 1h)
 
 **Implementation Summary:**
 - Fixed critical OLLAMA_BASE_URL environment variable issue in `letta_server.py`

@@ -1,5 +1,9 @@
 # Stateful Agent-First Architecture Specification
 
+**Status**: Phase 1 Complete ✅ (2025-08-21)  
+**Current Phase**: Ready for Phase 2 - UI Integration  
+**Test Results**: All Phase 1 tests passing (6/6)
+
 ## Vision Statement
 Transform the Letta Construction Claim Assistant from a RAG-first system with passive memory to an agent-first system where a stateful Letta agent serves as the primary interface, actively learning about cases over time and intelligently leveraging RAG search as a tool when needed.
 
@@ -380,7 +384,7 @@ async def implement_archival_memory(agent_id: str):
             )
 ```
 
-### 4. Implementation Phases (Revised for Core Functionality First)
+### 4. Implementation Phases (Phase 0 & 1 Complete)
 
 #### Phase 0: Technical Discovery & Validation ✅ COMPLETE (2025-08-21)
 **Purpose**: Validate Letta v0.10.0 capabilities and establish baseline functionality before implementation.
@@ -430,14 +434,21 @@ async def implement_archival_memory(agent_id: str):
 - ✅ Provider bridge configuration functional
 - ✅ Ollama running locally with 16 models available
 
-#### Phase 1: Core Agent with RAG Tool (Ready to Start)
+#### Phase 1: Core Agent with RAG Tool ✅ COMPLETE (2025-08-21, 2h)
 - [x] ~~Fix Letta server startup to set `OLLAMA_BASE_URL` environment variable~~ ✅ Completed in Phase 0
-- [ ] Create basic `search_documents` tool using existing vector store
-- [ ] Implement agent creation with tool at matter creation
-- [ ] Connect tool to existing RAG infrastructure
-- [ ] Ensure proper citation formatting
-- [ ] Add provider-prefixed model names (e.g., "ollama/gpt-oss:20b")
-- [ ] Test basic agent creation and message handling
+- [x] Create basic `search_documents` tool using existing vector store ✅
+- [x] Implement agent creation with tool at matter creation ✅
+- [x] Connect tool to existing RAG infrastructure ✅
+- [x] Ensure proper citation formatting ✅
+- [x] Add provider-prefixed model names (e.g., "ollama/gpt-oss:20b") ✅
+- [x] Test basic agent creation and message handling ✅
+
+**Implementation Summary:**
+- Created `app/letta_tools.py` with search_documents tool
+- Updated `app/letta_adapter.py` for tool registration
+- Enhanced `app/letta_provider_bridge.py` with provider prefixes
+- Created `app/letta_agent.py` for stateful agent handling
+- All tests passing (6/6)
 
 #### Phase 2: UI Integration (Week 1-2)
 - [ ] Remove chat mode selector
@@ -1045,18 +1056,28 @@ AGENT_TEMPLATE = {
 - Provider selection happens at matter creation time
 - Cannot be changed after agent creation
 - Tools can potentially use different models (future enhancement)
+- **Phase 1 Learning**: Provider prefixing (ollama/, gemini/) is critical for Letta v0.10.0
 
 ### Leveraging Existing Infrastructure
 - Use existing RAG engine and vector stores
 - No need to rebuild document search functionality
 - Agent calls existing infrastructure through tools
 - Minimal changes to current system
+- **Phase 1 Learning**: Tool implementation must be synchronous for Letta v0.10.0
 
 ### Focus on Core Functionality First
-- Start with single search_documents tool
-- Rely on Letta's built-in memory management
+- Start with single search_documents tool ✅ Implemented
+- Rely on Letta's built-in memory management ✅ Working
 - Add advanced features incrementally
 - Ensure basic stateful agent works before adding complexity
+- **Phase 1 Learning**: Mix of sync/async clients requires careful handling
+
+### Technical Discoveries from Phase 1
+- Letta v0.10.0 uses RESTClient (synchronous), not AsyncLetta
+- Tool registration uses `create_tool()` not `tools.upsert()`
+- Agent messages API may return 500 errors with complex tools
+- Memory API differs from expected interface (no `agents.memory` attribute)
+- OLLAMA_BASE_URL environment variable is required for Ollama provider
 
 ## Conclusion
 

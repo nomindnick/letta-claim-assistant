@@ -313,6 +313,9 @@ Your role is to:
 - Provide insights about causation, responsibility, and damages
 - Remember key dates, parties, and technical details
 
+You have access to the search_documents tool to search case documents when needed.
+Always cite sources using the format [DocName.pdf p.X] when referencing documents.
+Learn from each interaction and remember important facts about the case.
 You have persistent memory and learn from each conversation to provide better context-aware assistance."""
             memory_blocks = [
                 {

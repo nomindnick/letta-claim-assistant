@@ -205,8 +205,19 @@ class LettaProviderBridge:
             logger.warning("LlmConfig not available, returning dict format")
             return None
         
+        # Add provider prefix to model name for Letta v0.10.0 compatibility
+        model_name = provider_config.model_name
+        if provider_config.provider_type == "ollama" and not model_name.startswith("ollama/"):
+            model_name = f"ollama/{model_name}"
+        elif provider_config.provider_type == "google_ai" and not model_name.startswith("gemini/"):
+            model_name = f"gemini/{model_name}"
+        elif provider_config.provider_type == "openai" and not model_name.startswith("openai/"):
+            model_name = f"openai/{model_name}"
+        elif provider_config.provider_type == "anthropic" and not model_name.startswith("anthropic/"):
+            model_name = f"anthropic/{model_name}"
+        
         config_dict = {
-            "model": provider_config.model_name,
+            "model": model_name,
             "model_endpoint_type": provider_config.provider_type,
             "model_endpoint": provider_config.endpoint_url,
             "context_window": provider_config.context_window,
@@ -240,8 +251,18 @@ class LettaProviderBridge:
             logger.warning("EmbeddingConfig not available or no embedding model specified")
             return None
         
+        # Add provider prefix to embedding model name for Letta v0.10.0 compatibility
+        embedding_model = provider_config.embedding_model
+        if provider_config.provider_type == "ollama" and not embedding_model.startswith("ollama/"):
+            embedding_model = f"ollama/{embedding_model}"
+        elif provider_config.provider_type == "google_ai" and not embedding_model.startswith("models/"):
+            # Gemini uses "models/" prefix for embeddings
+            embedding_model = embedding_model
+        elif provider_config.provider_type == "openai" and not embedding_model.startswith("openai/"):
+            embedding_model = f"openai/{embedding_model}"
+        
         config_dict = {
-            "embedding_model": provider_config.embedding_model,
+            "embedding_model": embedding_model,
             "embedding_endpoint_type": provider_config.provider_type,
             "embedding_endpoint": provider_config.embedding_endpoint or provider_config.endpoint_url,
             "embedding_dim": provider_config.embedding_dim
