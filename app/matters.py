@@ -104,6 +104,89 @@ class MatterManager:
         
         return matter
     
+    def create_matter_with_provider(
+        self, 
+        name: str,
+        provider: str,
+        generation_model: str,
+        embedding_model: str = None
+    ) -> Matter:
+        """
+        Create a new Matter with provider configuration.
+        
+        Args:
+            name: Human-readable matter name
+            provider: LLM provider (ollama, gemini, openai)
+            generation_model: Generation model name
+            embedding_model: Embedding model name (optional for some providers)
+            
+        Returns:
+            Matter instance with provider configuration
+            
+        Raises:
+            ValueError: If matter name is invalid or already exists
+        """
+        # Use the same logic as create_matter but with provider config
+        if not name or not name.strip():
+            raise ValueError("Matter name cannot be empty")
+        
+        # Sanitize name for filesystem
+        slug = slugify(name)
+        
+        # Check if matter already exists
+        matter_root = self.data_root / f"Matter_{slug}"
+        if matter_root.exists():
+            raise ValueError(f"Matter '{name}' already exists")
+        
+        # Create matter directory structure
+        paths = self._create_matter_directories(matter_root)
+        
+        # Create Matter instance with provider configuration
+        matter = Matter(
+            id=str(uuid.uuid4()),
+            name=name.strip(),
+            slug=slug,
+            created_at=datetime.now(),
+            provider=provider,
+            generation_model=generation_model,
+            embedding_model=embedding_model or "",
+            paths=paths
+        )
+        
+        # Save matter configuration
+        settings.save_matter_config(matter)
+        
+        # Initialize Letta adapter for memory - will be created with provider config
+        from .letta_adapter import LettaAdapter
+        adapter = LettaAdapter(
+            matter_path=matter_root,
+            matter_name=matter.name,
+            matter_id=matter.id
+        )
+        logger.info("Letta agent initialized for new matter", matter_id=matter.id)
+        
+        logger.info(
+            "Matter created successfully with provider configuration",
+            matter_id=matter.id,
+            matter_name=matter.name,
+            matter_slug=matter.slug,
+            matter_path=str(matter_root),
+            provider=provider,
+            model=generation_model
+        )
+        
+        return matter
+    
+    def update_matter(self, matter: Matter) -> None:
+        """
+        Update matter configuration.
+        
+        Args:
+            matter: Matter instance with updated values
+        """
+        settings.save_matter_config(matter)
+        logger.info("Matter updated", matter_id=matter.id)
+    
     def list_matters(self) -> List[Matter]:
         """
         List all available Matters.

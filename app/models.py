@@ -64,8 +64,10 @@ class Matter(BaseModel):
     name: str = Field(..., min_length=1, max_length=200, description="Human-readable matter name")
     slug: str = Field(..., description="URL-safe matter identifier")
     created_at: datetime = Field(default_factory=datetime.now, description="Matter creation timestamp")
+    provider: str = Field(default="ollama", description="LLM provider (ollama, gemini, openai)")
     embedding_model: str = Field(default="nomic-embed-text", description="Embedding model used")
     generation_model: str = Field(default="gpt-oss:20b", description="Generation model used")
+    agent_id: Optional[str] = Field(None, description="Letta agent ID for this matter")
     paths: MatterPaths
 
     @field_validator('name')
@@ -122,8 +124,10 @@ class Matter(BaseModel):
             name=config_dict["name"],
             slug=config_dict["slug"],
             created_at=datetime.fromisoformat(config_dict["created_at"]),
+            provider=config_dict.get("provider", "ollama"),
             embedding_model=config_dict.get("embedding_model", "nomic-embed-text"),
             generation_model=config_dict.get("generation_model", "gpt-oss:20b"),
+            agent_id=config_dict.get("agent_id"),
             paths=paths
         )
 
@@ -305,9 +309,13 @@ class MatterSummary(BaseModel):
 
 
 class CreateMatterRequest(BaseModel):
-    """Request to create a new matter."""
+    """Request to create a new matter with provider configuration."""
     
     name: str = Field(..., min_length=1, max_length=200, description="Matter name")
+    provider: Optional[str] = Field(None, description="LLM provider (ollama, gemini, openai)")
+    generation_model: Optional[str] = Field(None, description="Generation model name")
+    embedding_model: Optional[str] = Field(None, description="Embedding model name")
+    api_key: Optional[str] = Field(None, description="API key for external providers")
 
     @field_validator('name')
     @classmethod

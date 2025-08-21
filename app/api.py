@@ -436,9 +436,86 @@ class ProviderSwitchRequest(BaseModel):
 # Matter Management Endpoints
 @app.post("/api/matters", response_model=CreateMatterResponse)
 async def create_matter(request: CreateMatterRequest):
-    """Create a new Matter with filesystem structure."""
+    """Create a new Matter with filesystem structure and provider configuration."""
     try:
-        matter = matter_manager.create_matter(request.name)
+        # Check if provider configuration is provided
+        if request.provider and request.generation_model:
+            # Create matter with provider configuration
+            matter = matter_manager.create_matter_with_provider(
+                name=request.name,
+                provider=request.provider,
+                generation_model=request.generation_model,
+                embedding_model=request.embedding_model
+            )
+            
+            # If API key provided, store it securely (for external providers)
+            if request.api_key and request.provider in ['gemini', 'openai']:
+                # Store API key in provider configuration
+                from .provider_management import provider_manager
+                await provider_manager.store_api_key(request.provider, request.api_key)
+            
+            # Create Letta agent with the specified provider configuration
+            if matter:
+                try:
+                    from .letta_agent import agent_handler
+                    from .letta_adapter import LettaAdapter
+                    from .letta_provider_bridge import LettaProviderBridge
+                    
+                    # Create adapter for the matter
+                    adapter = LettaAdapter(
+                        matter_path=matter.paths.root,
+                        matter_name=matter.name,
+                        matter_id=matter.id
+                    )
+                    
+                    # Configure provider for the agent
+                    bridge = LettaProviderBridge()
+                    if request.provider == 'ollama':
+                        provider_config = bridge.get_ollama_config(
+                            model=request.generation_model,
+                            embedding_model=request.embedding_model
+                        )
+                    elif request.provider == 'gemini':
+                        provider_config = bridge.get_gemini_config(
+                            api_key=request.api_key,
+                            model=request.generation_model
+                        )
+                    elif request.provider == 'openai':
+                        provider_config = bridge.get_openai_config(
+                            api_key=request.api_key,
+                            model=request.generation_model,
+                            embedding_model=request.embedding_model
+                        )
+                    else:
+                        provider_config = None
+                    
+                    # Set provider configuration for the adapter
+                    if provider_config:
+                        adapter.provider_config = provider_config
+                    
+                    # Initialize the adapter (creates agent with provider config)
+                    await adapter._ensure_initialized()
+                    
+                    # Store agent ID in matter
+                    if adapter.agent_id:
+                        matter.agent_id = adapter.agent_id
+                        matter_manager.update_matter(matter)
+                    
+                    logger.info(
+                        "Created matter with provider configuration",
+                        matter_id=matter.id,
+                        provider=request.provider,
+                        model=request.generation_model,
+                        agent_id=adapter.agent_id
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Failed to create Letta agent for matter: {e}")
+                    # Continue - matter is created even if agent creation fails
+        else:
+            # Legacy: Create matter without provider configuration
+            matter = matter_manager.create_matter(request.name)
+        
         return CreateMatterResponse(
             id=matter.id,
             slug=matter.slug,

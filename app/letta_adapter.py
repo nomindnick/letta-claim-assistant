@@ -1575,21 +1575,59 @@ Provide a comprehensive answer based on what you remember about this matter. If 
     async def _create_new_agent_async(self) -> None:
         """Create new Letta agent with construction domain configuration."""
         try:
-            # Load matter preferences if available
-            matter_prefs_file = self.matter_path / "provider_preferences.json"
-            matter_preferences = {}
-            if matter_prefs_file.exists():
-                try:
-                    with open(matter_prefs_file, 'r') as f:
-                        matter_preferences = json.load(f)
-                except Exception as e:
-                    logger.debug(f"Could not load matter preferences: {e}")
+            # First check if Matter has provider configuration stored
+            from .matters import matter_manager
+            matter = matter_manager.get_matter_by_id(self.matter_id)
             
-            # Get provider configuration using the bridge
-            provider_config = letta_provider_bridge.get_provider_for_matter(
-                self.matter_id,
-                matter_preferences
-            )
+            if matter and hasattr(matter, 'provider') and matter.provider:
+                # Use Matter's provider configuration (locked at creation)
+                logger.info(f"Using matter's locked provider configuration: {matter.provider}/{matter.generation_model}")
+                
+                # Create provider config from Matter settings
+                if matter.provider == 'ollama':
+                    provider_config = letta_provider_bridge.get_ollama_config(
+                        model=matter.generation_model,
+                        embedding_model=matter.embedding_model
+                    )
+                elif matter.provider == 'gemini':
+                    # Get API key from provider manager
+                    from .provider_management import provider_manager
+                    api_key = provider_manager.get_api_key('gemini')
+                    provider_config = letta_provider_bridge.get_gemini_config(
+                        api_key=api_key,
+                        model=matter.generation_model
+                    )
+                elif matter.provider == 'openai':
+                    from .provider_management import provider_manager
+                    api_key = provider_manager.get_api_key('openai')
+                    provider_config = letta_provider_bridge.get_openai_config(
+                        api_key=api_key,
+                        model=matter.generation_model,
+                        embedding_model=matter.embedding_model
+                    )
+                else:
+                    # Unknown provider, fall back to default
+                    logger.warning(f"Unknown provider {matter.provider}, using default")
+                    provider_config = letta_provider_bridge.get_provider_for_matter(
+                        self.matter_id,
+                        {}
+                    )
+            else:
+                # Legacy: Load matter preferences if available
+                matter_prefs_file = self.matter_path / "provider_preferences.json"
+                matter_preferences = {}
+                if matter_prefs_file.exists():
+                    try:
+                        with open(matter_prefs_file, 'r') as f:
+                            matter_preferences = json.load(f)
+                    except Exception as e:
+                        logger.debug(f"Could not load matter preferences: {e}")
+                
+                # Get provider configuration using the bridge
+                provider_config = letta_provider_bridge.get_provider_for_matter(
+                    self.matter_id,
+                    matter_preferences
+                )
             
             # Check provider health before using
             is_healthy = await provider_health_monitor.check_provider_health(provider_config)

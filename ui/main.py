@@ -98,6 +98,9 @@ class LettaClaimUI:
         # Setup keyboard shortcuts
         # self._setup_keyboard_shortcuts()  # Disabled due to NiceGUI API changes
         
+        # Track timers for cleanup
+        self.timers = []
+        
         # Show initial loading
         loading_container = self.loading_spinner.show("Initializing application...")
         
@@ -143,14 +146,14 @@ class LettaClaimUI:
             await self._refresh_memory_stats()
             await self._update_agent_health()
             
-            # Start background job polling
-            ui.timer(2.0, self._poll_job_status)
+            # Start background job polling with client-safe wrapper
+            self.job_timer = ui.timer(2.0, self._safe_timer_callback(self._poll_job_status))
             
-            # Start memory stats refresh timer
-            ui.timer(30.0, self._refresh_memory_stats)
+            # Start memory stats refresh timer with client-safe wrapper
+            self.memory_timer = ui.timer(30.0, self._safe_timer_callback(self._refresh_memory_stats))
             
-            # Start agent health monitoring
-            ui.timer(10.0, self._update_agent_health)
+            # Start agent health monitoring with client-safe wrapper
+            self.health_timer = ui.timer(10.0, self._safe_timer_callback(self._update_agent_health))
             
             # Initialize consent checking for any existing external providers
             await self._check_provider_consent_status()
@@ -770,8 +773,8 @@ class LettaClaimUI:
             ui.notify(f"Failed to switch matter: {str(e)}", type="negative")
     
     async def _show_create_matter_dialog(self):
-        """Show create matter dialog."""
-        with ui.dialog() as dialog, ui.card():
+        """Show create matter dialog with provider selection."""
+        with ui.dialog() as dialog, ui.card().classes('w-96'):
             ui.label('Create New Matter').classes('text-lg font-bold mb-4')
             
             matter_name = ui.input(
@@ -779,24 +782,116 @@ class LettaClaimUI:
                 placeholder='e.g., Dry Well Claim - ABC Construction'
             ).classes('w-full mb-4')
             
+            ui.separator().classes('mb-4')
+            
+            # Provider selection section
+            ui.label('LLM Provider Configuration').classes('font-semibold mb-2')
+            ui.label('⚠️ This selection is permanent for the matter').classes('text-sm text-amber-600 mb-2')
+            
+            # Provider selector
+            provider_select = ui.select(
+                {
+                    'ollama': 'Ollama (Local)',
+                    'gemini': 'Gemini (External)',
+                    'openai': 'OpenAI (External)'
+                },
+                label='Provider',
+                value='ollama'
+            ).classes('w-full mb-2')
+            
+            # Model inputs (dynamically shown based on provider)
+            generation_model = ui.input(
+                label='Generation Model',
+                value='gpt-oss:20b',
+                placeholder='e.g., gpt-oss:20b'
+            ).classes('w-full mb-2')
+            
+            embedding_model = ui.input(
+                label='Embedding Model',
+                value='nomic-embed-text',
+                placeholder='e.g., nomic-embed-text'
+            ).classes('w-full mb-2')
+            
+            # API key input (hidden for Ollama)
+            api_key_input = ui.input(
+                label='API Key',
+                password=True,
+                placeholder='Enter API key for external provider'
+            ).classes('w-full mb-4 hidden')
+            
+            # Update fields based on provider selection
+            async def on_provider_change(e):
+                if e.value == 'ollama':
+                    generation_model.value = 'gpt-oss:20b'
+                    embedding_model.value = 'nomic-embed-text'
+                    embedding_model.props(remove='disable')
+                    api_key_input.classes(add='hidden')
+                elif e.value == 'gemini':
+                    generation_model.value = 'gemini-2.0-flash-exp'
+                    embedding_model.value = ''
+                    embedding_model.props('disable')  # Gemini doesn't do embeddings
+                    api_key_input.classes(remove='hidden')
+                elif e.value == 'openai':
+                    generation_model.value = 'gpt-4'
+                    embedding_model.value = 'text-embedding-ada-002'
+                    embedding_model.props(remove='disable')
+                    api_key_input.classes(remove='hidden')
+            
+            provider_select.on_change = on_provider_change
+            
             with ui.row().classes('w-full justify-end'):
                 ui.button('Cancel', on_click=dialog.close).props('flat')
                 ui.button(
                     'Create',
-                    on_click=lambda: self._create_matter(dialog, matter_name.value)
+                    on_click=lambda: self._create_matter_with_provider(
+                        dialog,
+                        matter_name.value,
+                        provider_select.value,
+                        generation_model.value,
+                        embedding_model.value,
+                        api_key_input.value
+                    )
                 ).props('color=primary')
         
         dialog.open()
     
-    async def _create_matter(self, dialog, name: str):
-        """Create a new matter."""
+    async def _create_matter_with_provider(
+        self, 
+        dialog, 
+        name: str,
+        provider: str,
+        generation_model: str,
+        embedding_model: str,
+        api_key: str = None
+    ):
+        """Create a new matter with provider configuration."""
         if not name or not name.strip():
             ui.notify("Please enter a matter name", type="negative")
             return
         
+        if not generation_model or not generation_model.strip():
+            ui.notify("Please specify a generation model", type="negative")
+            return
+        
+        # For Ollama, embedding model is required
+        if provider == 'ollama' and (not embedding_model or not embedding_model.strip()):
+            ui.notify("Please specify an embedding model for Ollama", type="negative")
+            return
+        
+        # For external providers, API key is required
+        if provider in ['gemini', 'openai'] and (not api_key or not api_key.strip()):
+            ui.notify(f"Please provide an API key for {provider.title()}", type="negative")
+            return
+        
         try:
-            # Create matter via API
-            result = await self.api_client.create_matter(name.strip())
+            # Create matter via API with provider configuration
+            result = await self.api_client.create_matter_with_provider(
+                name=name.strip(),
+                provider=provider,
+                generation_model=generation_model.strip(),
+                embedding_model=embedding_model.strip() if embedding_model else None,
+                api_key=api_key.strip() if api_key else None
+            )
             
             # Refresh matters list
             await self._load_matters()
@@ -825,6 +920,39 @@ class LettaClaimUI:
         except RuntimeError:
             # Client disconnected - just log it
             logger.debug(f"Notification failed (client disconnected): {message}")
+    
+    def _safe_timer_callback(self, async_func):
+        """Wrap timer callback to handle client disconnection gracefully."""
+        async def wrapper():
+            try:
+                # Check if the client/element still exists
+                if not hasattr(self, '__dict__'):
+                    return
+                await async_func()
+            except RuntimeError as e:
+                if "client" in str(e).lower() or "deleted" in str(e).lower():
+                    # Client has been deleted, stop the timer silently
+                    logger.debug(f"Timer callback skipped - client disconnected: {async_func.__name__}")
+                    return
+                # Re-raise other runtime errors
+                raise
+            except Exception as e:
+                # Log other errors but don't crash
+                logger.error(f"Error in timer callback {async_func.__name__}", error=str(e))
+        return wrapper
+    
+    def _cleanup_timers(self):
+        """Clean up all active timers."""
+        logger.info("Cleaning up timers")
+        
+        # Stop all timers
+        for timer_name in ['job_timer', 'memory_timer', 'health_timer']:
+            timer = getattr(self, timer_name, None)
+            if timer:
+                try:
+                    timer.active = False
+                except Exception as e:
+                    logger.debug(f"Error stopping timer {timer_name}: {e}")
     
     async def _handle_file_upload(self, e):
         """Handle PDF file upload."""
@@ -1224,7 +1352,12 @@ class LettaClaimUI:
     
     async def _poll_job_status(self):
         """Poll job status for uploads in progress."""
-        if not self.upload_jobs:
+        try:
+            # Check if client is still connected
+            if not hasattr(self, 'upload_jobs') or not self.upload_jobs:
+                return
+        except RuntimeError:
+            # Client has been deleted
             return
         
         jobs_to_remove = []
@@ -1412,6 +1545,14 @@ class LettaClaimUI:
     @measure_performance
     async def _refresh_memory_stats(self):
         """Refresh memory statistics for current matter."""
+        try:
+            # Check if client is still connected
+            if not hasattr(self, 'current_matter') or not self.current_matter:
+                return
+        except RuntimeError:
+            # Client has been deleted
+            return
+        
         if not self.current_matter:
             # Show disconnected state when no matter is selected
             if self.memory_dashboard:
@@ -1457,6 +1598,10 @@ class LettaClaimUI:
     async def _update_agent_health(self):
         """Update agent health indicator."""
         try:
+            # Check if client is still connected
+            if not hasattr(self, 'api_client') or not self.api_client:
+                return
+                
             # Get health status from API
             health = await self.api_client.get("api/letta/health")
             

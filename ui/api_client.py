@@ -143,7 +143,7 @@ class APIClient:
     
     # Matter Management
     async def create_matter(self, name: str) -> Dict[str, Any]:
-        """Create a new Matter."""
+        """Create a new Matter (legacy method without provider)."""
         session = await self._get_session()
         try:
             async with session.post(
@@ -154,6 +154,39 @@ class APIClient:
                 return await response.json()
         except Exception as e:
             logger.error("Failed to create matter", error=str(e))
+            raise
+    
+    async def create_matter_with_provider(
+        self,
+        name: str,
+        provider: str,
+        generation_model: str,
+        embedding_model: str = None,
+        api_key: str = None
+    ) -> Dict[str, Any]:
+        """Create a new Matter with provider configuration."""
+        session = await self._get_session()
+        try:
+            payload = {
+                "name": name,
+                "provider": provider,
+                "generation_model": generation_model
+            }
+            
+            if embedding_model:
+                payload["embedding_model"] = embedding_model
+            
+            if api_key:
+                payload["api_key"] = api_key
+            
+            async with session.post(
+                f"{self.base_url}/api/matters",
+                json=payload
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as e:
+            logger.error("Failed to create matter with provider", error=str(e))
             raise
     
     async def list_matters(self) -> List[Dict[str, Any]]:
