@@ -154,8 +154,8 @@ class LettaAgentHandler:
             logger.info(f"Sending message to agent for matter {matter_id}")
             
             # Use the Letta client to send message
-            if not adapter.client or not adapter.agent_id:
-                logger.error("No client or agent available")
+            if not adapter.sync_client or not adapter.agent_id:
+                logger.error("No sync client or agent available")
                 return AgentResponse(
                     message="The conversation system is not available. Please try again later.",
                     matter_id=matter_id,
@@ -165,19 +165,25 @@ class LettaAgentHandler:
             
             # Send message and get response
             try:
-                from letta_client.types import MessageCreate
+                # Use sync client in async context since Letta's async client 
+                # seems to have issues with message creation
+                import asyncio
+                from concurrent.futures import ThreadPoolExecutor
                 
-                # Create message
-                user_message = MessageCreate(
-                    role="user",
-                    content=message
-                )
-                
-                # Send to agent
-                response = await adapter.client.agents.messages.create(
-                    agent_id=adapter.agent_id,
-                    messages=[user_message]
-                )
+                # Create a thread pool executor for sync operations
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    # Run the sync operation in the executor
+                    def send_message():
+                        """Send message using sync client."""
+                        return adapter.sync_client.agents.messages.create(
+                            agent_id=adapter.agent_id,
+                            messages=[{"role": "user", "content": message}]
+                        )
+                    
+                    response = await asyncio.get_event_loop().run_in_executor(
+                        executor,
+                        send_message
+                    )
                 
                 # Process response
                 return self._process_agent_response(
@@ -293,6 +299,36 @@ class LettaAgentHandler:
             citations=citations if citations else None,
             response_time=response_time,
             timestamp=datetime.now()
+        )
+    
+    async def send_message(
+        self,
+        matter_id: str,
+        message: str,
+        k: int = 8,
+        max_tokens: int = 1000,
+        stream: bool = False
+    ) -> AgentResponse:
+        """
+        Send message to matter's agent (compatibility wrapper).
+        
+        This method wraps handle_user_message for API compatibility.
+        
+        Args:
+            matter_id: ID of the matter
+            message: User's message
+            k: Number of search results (passed to agent context)
+            max_tokens: Maximum tokens for response
+            stream: Whether to stream the response
+            
+        Returns:
+            AgentResponse with message, tool usage, and metadata
+        """
+        # Call the main handler method
+        return await self.handle_user_message(
+            matter_id=matter_id,
+            message=message,
+            stream=stream
         )
     
     async def get_agent_memory(self, matter_id: str) -> Dict[str, Any]:

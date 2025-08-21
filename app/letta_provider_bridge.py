@@ -205,11 +205,24 @@ class LettaProviderBridge:
             logger.warning("LlmConfig not available, returning dict format")
             return None
         
-        # Add provider prefix to model name for Letta v0.10.0 compatibility
+        # For Ollama, use OpenAI compatibility mode
+        if provider_config.provider_type == "ollama":
+            # Use OpenAI endpoint type with Ollama's OpenAI-compatible API
+            config_dict = {
+                "model": provider_config.model_name,  # Don't add prefix for OpenAI mode
+                "model_endpoint_type": "openai",  # Use OpenAI type for compatibility
+                "model_endpoint": "http://localhost:11434/v1",  # OpenAI-compatible endpoint
+                "context_window": provider_config.context_window,
+                "max_tokens": provider_config.max_tokens,
+                "temperature": provider_config.temperature,
+                "top_p": provider_config.top_p
+            }
+            logger.info(f"Configured Ollama in OpenAI compatibility mode for model: {provider_config.model_name}")
+            return config_dict
+        
+        # Add provider prefix to model name for other providers
         model_name = provider_config.model_name
-        if provider_config.provider_type == "ollama" and not model_name.startswith("ollama/"):
-            model_name = f"ollama/{model_name}"
-        elif provider_config.provider_type == "google_ai" and not model_name.startswith("gemini/"):
+        if provider_config.provider_type == "google_ai" and not model_name.startswith("gemini/"):
             model_name = f"gemini/{model_name}"
         elif provider_config.provider_type == "openai" and not model_name.startswith("openai/"):
             model_name = f"openai/{model_name}"
@@ -251,11 +264,20 @@ class LettaProviderBridge:
             logger.warning("EmbeddingConfig not available or no embedding model specified")
             return None
         
-        # Add provider prefix to embedding model name for Letta v0.10.0 compatibility
+        # For Ollama, use OpenAI compatibility mode for embeddings too
+        if provider_config.provider_type == "ollama":
+            config_dict = {
+                "embedding_model": provider_config.embedding_model,  # Don't add prefix for OpenAI mode
+                "embedding_endpoint_type": "openai",  # Use OpenAI type for compatibility
+                "embedding_endpoint": "http://localhost:11434/v1",  # OpenAI-compatible endpoint
+                "embedding_dim": provider_config.embedding_dim
+            }
+            logger.info(f"Configured Ollama embeddings in OpenAI compatibility mode: {provider_config.embedding_model}")
+            return config_dict
+        
+        # Add provider prefix to embedding model name for other providers
         embedding_model = provider_config.embedding_model
-        if provider_config.provider_type == "ollama" and not embedding_model.startswith("ollama/"):
-            embedding_model = f"ollama/{embedding_model}"
-        elif provider_config.provider_type == "google_ai" and not embedding_model.startswith("models/"):
+        if provider_config.provider_type == "google_ai" and not embedding_model.startswith("models/"):
             # Gemini uses "models/" prefix for embeddings
             embedding_model = embedding_model
         elif provider_config.provider_type == "openai" and not embedding_model.startswith("openai/"):

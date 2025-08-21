@@ -18,11 +18,11 @@ try:
     from letta_client.errors import (
         BadRequestError,
         NotFoundError,
-        InternalServerError,
         UnprocessableEntityError
     )
-    # Use base Exception as ClientError
+    # Use base Exception as ClientError and InternalServerError
     ClientError = Exception
+    InternalServerError = Exception  # Not available in newer letta_client
     LETTA_AVAILABLE = True
 except ImportError:
     AsyncLetta = None
