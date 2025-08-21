@@ -40,8 +40,9 @@ class APIClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
         if self.session is None or self.session.closed:
+            # Use longer timeout for LLM operations on CPU
             self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
+                timeout=aiohttp.ClientTimeout(total=1800)  # 30 minutes default for CPU-based LLM operations
             )
         return self.session
     
@@ -427,9 +428,12 @@ class APIClient:
             if max_tokens is not None:
                 payload["max_tokens"] = max_tokens
                 
+            # Use longer timeout specifically for chat requests
+            timeout = aiohttp.ClientTimeout(total=1800)  # 30 minutes for chat/LLM operations on CPU
             async with session.post(
                 f"{self.base_url}/api/chat",
-                json=payload
+                json=payload,
+                timeout=timeout
             ) as response:
                 response.raise_for_status()
                 return await response.json()

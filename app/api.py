@@ -19,7 +19,7 @@ from datetime import datetime
 
 from .models import (
     CreateMatterRequest, CreateMatterResponse, MatterSummary,
-    ChatRequest, ChatResponse, JobStatus, DocumentInfo,
+    ChatRequest, ChatResponse, ChatMode, JobStatus, DocumentInfo,
     QualityInsights, RetrievalWeights,
     CreateMemoryItemRequest, UpdateMemoryItemRequest, MemoryOperationResponse,
     MemoryCommandRequest, MemoryCommandResponse
@@ -915,9 +915,10 @@ async def chat(request: ChatRequest):
         # 2. Get active LLM provider
         active_provider = provider_manager.get_active_provider()
         if not active_provider:
+            # Provide a more helpful error message
             raise HTTPException(
                 status_code=503,
-                detail="No LLM provider available. Please configure a provider in settings."
+                detail="No LLM provider configured. Please go to Settings and configure either Ollama (local) or Gemini (external) as your LLM provider. Memory-only mode also requires an LLM to generate responses."
             )
         
         # 3. Initialize RAG engine for the matter

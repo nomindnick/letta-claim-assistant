@@ -464,6 +464,17 @@ class MemoryOperationToast:
             icon='error',
             timeout=4000
         )
+    
+    @staticmethod
+    def show_info(message: str = "Memory operation"):
+        """Show info notification."""
+        ui.notify(
+            message,
+            type='info',
+            position='bottom-right',
+            icon='info',
+            timeout=3000
+        )
 
 
 class MemoryContextTooltip:

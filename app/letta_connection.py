@@ -460,11 +460,22 @@ class LettaConnectionManager:
                 except (BadRequestError, ClientError, InternalServerError) as e:
                     self.metrics.record_operation(operation_name, 0, False)
                     
+                    # Log more details about the error
+                    error_details = str(e)
+                    if hasattr(e, 'response'):
+                        if hasattr(e.response, 'text'):
+                            error_details = f"{error_details} - Response: {e.response.text}"
+                        elif hasattr(e.response, 'content'):
+                            error_details = f"{error_details} - Response: {e.response.content}"
+                    
                     if attempt < max_retries - 1:
-                        logger.warning(f"{operation_name} failed, retrying: {e}")
+                        logger.warning(f"{operation_name} failed, retrying: {error_details}")
                         await asyncio.sleep(1)
                     else:
-                        logger.error(f"{operation_name} failed after {max_retries} attempts: {e}")
+                        logger.error(f"{operation_name} failed after {max_retries} attempts: {error_details}")
+                        # For InternalServerError, raise it so caller can handle differently
+                        if isinstance(e, InternalServerError):
+                            raise e
                         return None
                         
                 except Exception as e:

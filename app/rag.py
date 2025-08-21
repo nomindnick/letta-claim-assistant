@@ -286,7 +286,13 @@ class RAGEngine:
                 if mode != ChatMode.RAG_ONLY and self.letta_adapter:
                     try:
                         memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
-                        logger.debug("Agent memory recall completed", memory_items=len(memory_items))
+                        logger.info(
+                            "Agent memory recall completed",
+                            mode=mode.value,
+                            query_preview=query[:50],
+                            memory_items_count=len(memory_items),
+                            memory_items_preview=[item.label[:30] for item in memory_items[:3]] if memory_items else []
+                        )
                     except Exception as e:
                         logger.warning("Agent memory recall failed", error=str(e))
                         memory_items = []
@@ -330,7 +336,13 @@ class RAGEngine:
                 if mode != ChatMode.RAG_ONLY and self.letta_adapter:
                     try:
                         memory_items = await self.letta_adapter.recall(query, top_k=k_memory)
-                        logger.debug("Agent memory recall completed", memory_items=len(memory_items))
+                        logger.info(
+                            "Agent memory recall completed (basic mode)",
+                            mode=mode.value,
+                            query_preview=query[:50],
+                            memory_items_count=len(memory_items),
+                            memory_items_preview=[item.label[:30] for item in memory_items[:3]] if memory_items else []
+                        )
                     except Exception as e:
                         logger.warning("Agent memory recall failed", error=str(e))
                         memory_items = []

@@ -30,7 +30,8 @@ try:
         AgentState,
         LlmConfig,
         EmbeddingConfig,
-        Block  # Changed from MemoryBlock to Block
+        Block,  # Changed from MemoryBlock to Block
+        MessageCreate
     )
     # Get Letta version for compatibility checking
     try:
@@ -47,6 +48,7 @@ except ImportError:
     # Fallback for older versions or installation issues
     AsyncLetta = None
     Letta = None
+    MessageCreate = None
     LETTA_VERSION = None
     LETTA_CLIENT_VERSION = None
     print("Warning: Letta client import failed, using fallback implementation")
@@ -853,12 +855,26 @@ Return only the questions, one per line."""
             
             # Send message to agent for follow-up generation with retry
             async def _suggest_operation():
-                return await self.client.messages.send_message(
-                    agent_id=self.agent_id,
-                    role="user",
-                    message=followup_prompt,
-                    stream=False
-                )
+                try:
+                    message = MessageCreate(
+                        role="user",
+                        content=followup_prompt
+                    )
+                    return await self.client.agents.messages.create(
+                        agent_id=self.agent_id,
+                        messages=[message]
+                    )
+                except Exception as e:
+                    logger.debug(f"MessageCreate format failed in followup: {e}, trying dict format")
+                    return await self.client.agents.messages.create(
+                        agent_id=self.agent_id,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": followup_prompt
+                            }
+                        ]
+                    )
             
             response = await connection_manager.execute_with_retry(
                 "suggest",
@@ -903,6 +919,31 @@ Return only the questions, one per line."""
         Returns:
             Dict with answer, empty sources, and memory_used flag
         """
+        # WORKAROUND: Letta v0.10.0 has a bug where it doesn't respect agent's Ollama config
+        # and defaults to OpenAI. Until this is fixed, we'll provide a helpful message.
+        logger.warning(
+            "Memory-only mode temporarily unavailable due to Letta v0.10.0 bug",
+            letta_version=LETTA_VERSION,
+            hint="Letta is not respecting agent's Ollama configuration"
+        )
+        
+        return {
+            "answer": (
+                "Memory-only mode is temporarily unavailable due to a known issue in Letta v0.10.0.\n\n"
+                "The Letta server is not properly using the agent's Ollama configuration and is "
+                "defaulting to OpenAI instead. This is a bug in Letta that needs to be fixed.\n\n"
+                "As a workaround, please use 'Combined' mode which will search both documents and "
+                "memory, or 'Documents Only' mode for RAG-only queries.\n\n"
+                "We're working on a fix for this issue."
+            ),
+            "sources": [],
+            "memory_used": False,
+            "error": "Letta v0.10.0 configuration bug - defaulting to OpenAI instead of Ollama",
+            "workaround": "Use Combined or Documents Only mode"
+        }
+        
+        # Original implementation kept for when bug is fixed
+        """
         # Ensure initialized
         if not await self._ensure_initialized():
             logger.warning("Letta not available for memory-only chat")
@@ -912,6 +953,7 @@ Return only the questions, one per line."""
                 "memory_used": False,
                 "error": "Letta agent not available"
             }
+        """
         
         if not self.agent_id:
             return {
@@ -936,21 +978,53 @@ User query: {query}
 
 Provide a comprehensive answer based on what you remember about this matter. If you don't have sufficient information in memory, acknowledge this limitation."""
             
+            # Log the request details for debugging
+            logger.debug(
+                "Sending memory chat request",
+                agent_id=self.agent_id,
+                prompt_length=len(memory_prompt)
+            )
+            
             # Send message to agent
             async def _chat_operation():
-                return await self.client.messages.send_message(
-                    agent_id=self.agent_id,
-                    role="user",
-                    message=memory_prompt,
-                    stream=False
-                )
+                # Try simplified message format
+                try:
+                    # First try with MessageCreate object
+                    message = MessageCreate(
+                        role="user",
+                        content=memory_prompt
+                    )
+                    return await self.client.agents.messages.create(
+                        agent_id=self.agent_id,
+                        messages=[message]
+                    )
+                except Exception as e:
+                    logger.debug(f"MessageCreate format failed: {e}, trying dict format")
+                    # Fallback to dict format
+                    return await self.client.agents.messages.create(
+                        agent_id=self.agent_id,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": memory_prompt
+                            }
+                        ]
+                    )
             
             response = await connection_manager.execute_with_retry(
                 "memory_chat",
                 _chat_operation
             )
             
-            if not response or not hasattr(response, 'messages'):
+            # Log response structure for debugging
+            logger.debug(
+                "Memory chat response received",
+                response_type=type(response).__name__,
+                has_messages=hasattr(response, 'messages') if response else False,
+                response_attrs=dir(response) if response else []
+            )
+            
+            if not response:
                 return {
                     "answer": "I couldn't generate a response from memory. Please try again.",
                     "sources": [],
@@ -960,9 +1034,26 @@ Provide a comprehensive answer based on what you remember about this matter. If 
             
             # Extract the answer from the response
             answer = ""
-            for msg in response.messages:
-                if hasattr(msg, 'text') and msg.text:
-                    answer += msg.text + "\n"
+            
+            # Handle different response formats
+            if hasattr(response, 'messages') and response.messages:
+                for msg in response.messages:
+                    if hasattr(msg, 'text') and msg.text:
+                        answer += msg.text + "\n"
+                    elif hasattr(msg, 'content') and msg.content:
+                        answer += str(msg.content) + "\n"
+            elif isinstance(response, list):
+                # Response might be a list of messages
+                for msg in response:
+                    if hasattr(msg, 'text') and msg.text:
+                        answer += msg.text + "\n"
+                    elif hasattr(msg, 'content') and msg.content:
+                        answer += str(msg.content) + "\n"
+                    elif isinstance(msg, dict):
+                        if 'text' in msg:
+                            answer += msg['text'] + "\n"
+                        elif 'content' in msg:
+                            answer += str(msg['content']) + "\n"
             
             answer = answer.strip()
             
@@ -983,17 +1074,35 @@ Provide a comprehensive answer based on what you remember about this matter. If 
             }
             
         except Exception as e:
-            logger.error(
-                "Memory-only chat failed",
-                matter_id=self.matter_id,
-                error=str(e)
-            )
-            return {
-                "answer": f"Memory-only chat failed: {str(e)}",
-                "sources": [],
-                "memory_used": False,
-                "error": str(e)
-            }
+            error_message = str(e)
+            
+            # Check if this is a Letta server error
+            if "500" in error_message or "Internal" in error_message:
+                logger.error(
+                    "Letta server error in memory-only chat",
+                    matter_id=self.matter_id,
+                    error=error_message,
+                    hint="Check if Letta server is running and agent is properly configured"
+                )
+                # Try to provide a more helpful error message
+                return {
+                    "answer": "The Letta memory agent is experiencing issues. Please ensure:\n1. Letta server is running (check with 'letta server' command)\n2. An LLM provider is configured in Letta\n3. The agent for this matter exists\n\nYou may need to restart the Letta server or reconfigure the agent.",
+                    "sources": [],
+                    "memory_used": False,
+                    "error": f"Letta server error: {error_message}"
+                }
+            else:
+                logger.error(
+                    "Memory-only chat failed",
+                    matter_id=self.matter_id,
+                    error=error_message
+                )
+                return {
+                    "answer": f"Memory-only chat failed: {error_message}",
+                    "sources": [],
+                    "memory_used": False,
+                    "error": error_message
+                }
     
     async def get_memory_stats(self) -> Dict[str, Any]:
         """Get statistics about agent memory usage."""
