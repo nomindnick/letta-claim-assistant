@@ -595,6 +595,58 @@ async def get_active_matter():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/matters/{matter_id}")
+async def delete_matter(matter_id: str):
+    """
+    Delete a matter and all associated data.
+    
+    This will permanently delete:
+    - All documents and OCR files
+    - Vector store and embeddings
+    - Letta agent and memory
+    - Chat history
+    - Matter configuration
+    """
+    try:
+        # Check if matter exists
+        matter = matter_manager.get_matter_by_id(matter_id)
+        if not matter:
+            raise HTTPException(status_code=404, detail=f"Matter not found: {matter_id}")
+        
+        # Check if it's the currently active matter
+        active_matter = matter_manager.get_active_matter()
+        if active_matter and active_matter.id == matter_id:
+            # Switch to another matter or clear active matter
+            matters = matter_manager.list_matters()
+            other_matters = [m for m in matters if m.id != matter_id]
+            if other_matters:
+                # Switch to the first available matter
+                matter_manager.switch_matter(other_matters[0].id)
+            else:
+                # No other matters, clear active matter
+                matter_manager._current_matter = None
+        
+        # Delete the matter
+        success = await matter_manager.delete_matter(matter_id)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete matter")
+        
+        logger.info("Matter deleted via API", matter_id=matter_id)
+        
+        return {
+            "status": "success",
+            "message": f"Matter {matter_id} deleted successfully",
+            "deleted_at": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to delete matter", matter_id=matter_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Upload & Ingestion Endpoints
 @app.post("/api/matters/{matter_id}/upload")
 async def upload_files(matter_id: str, files: List[UploadFile] = File(...)):

@@ -278,11 +278,24 @@ class LettaClaimUI:
                     on_change=self._on_matter_changed
                 ).classes('w-full mb-2')
                 
-                ui.button(
-                    'Create Matter',
-                    on_click=self._show_create_matter_dialog,
-                    icon='add'
-                ).classes('w-full')
+                # Matter action buttons
+                with ui.row().classes('w-full gap-2'):
+                    ui.button(
+                        'Create',
+                        on_click=self._show_create_matter_dialog,
+                        icon='add'
+                    ).classes('flex-1')
+                    
+                    self.delete_matter_button = ui.button(
+                        'Delete',
+                        on_click=self._show_delete_matter_dialog,
+                        icon='delete',
+                        color='red'
+                    ).classes('flex-1')
+                    
+                    # Disable delete button if no matter selected
+                    if not self.current_matter:
+                        self.delete_matter_button.props('disable')
             
             # Document upload
             with ui.card().classes('w-full mb-4'):
@@ -757,6 +770,10 @@ class LettaClaimUI:
             if self.send_button:
                 self.send_button.props('disable')  # Keep send button disabled until text entered
             
+            # Enable delete button
+            if self.delete_matter_button:
+                self.delete_matter_button.props(remove='disable')
+            
             # Refresh UI components
             await self._refresh_document_list()
             await self._load_chat_history()
@@ -912,6 +929,125 @@ class LettaClaimUI:
         except Exception as e:
             logger.error("Failed to create matter", error=str(e))
             ui.notify(f"Failed to create matter: {str(e)}", type="negative")
+    
+    async def _show_delete_matter_dialog(self):
+        """Show confirmation dialog for matter deletion."""
+        if not self.current_matter:
+            ui.notify("No matter selected to delete", type="warning")
+            return
+        
+        # Check if this is the only matter
+        if len(self.matters_list) <= 1:
+            ui.notify("Cannot delete the only matter. Create another matter first.", type="warning")
+            return
+        
+        with ui.dialog() as dialog, ui.card().classes('w-96'):
+            ui.label('Delete Matter').classes('text-lg font-bold mb-4')
+            
+            # Warning icon and message
+            with ui.row().classes('items-center gap-3 mb-4'):
+                ui.icon('warning', size='xl').props('color=red')
+                ui.label('⚠️ This action cannot be undone!').classes('text-red-600 font-semibold')
+            
+            # Matter details
+            ui.label(f'Matter: {self.current_matter["name"]}').classes('mb-2')
+            
+            # What will be deleted
+            ui.label('The following will be permanently deleted:').classes('mb-2')
+            with ui.column().classes('ml-4 mb-4'):
+                ui.label('• All uploaded documents and OCR files')
+                ui.label('• Vector store and embeddings')
+                ui.label('• Letta agent memory and conversation history')
+                ui.label('• Chat history')
+                ui.label('• Matter configuration and settings')
+            
+            # Confirmation checkbox
+            confirm_checkbox = ui.checkbox(
+                'I understand this action is permanent',
+                value=False
+            ).classes('mb-4')
+            
+            # Action buttons
+            with ui.row().classes('w-full gap-2'):
+                ui.button(
+                    'Cancel',
+                    on_click=dialog.close,
+                    color='white'
+                ).classes('flex-1')
+                
+                async def handle_delete():
+                    await self._delete_matter(self.current_matter['id'], dialog)
+                
+                delete_button = ui.button(
+                    'Delete Matter',
+                    on_click=handle_delete,
+                    color='red'
+                ).props('disable').classes('flex-1')
+                
+                # Enable delete button only when checkbox is checked
+                def on_checkbox_change():
+                    if confirm_checkbox.value:
+                        delete_button.props(remove='disable')
+                    else:
+                        delete_button.props('disable')
+                
+                confirm_checkbox.on_value_change(on_checkbox_change)
+        
+        dialog.open()
+    
+    async def _delete_matter(self, matter_id: str, dialog):
+        """Delete the matter after confirmation."""
+        try:
+            # Close dialog first to avoid context issues
+            dialog.close()
+            
+            # Show loading notification
+            self.notification_manager.info("Deleting matter...")
+            
+            # Call API to delete matter
+            result = await self.api_client.delete_matter(matter_id)
+            
+            # Refresh matters list
+            await self._load_matters()
+            
+            # Update matter selector options
+            matter_options = {}
+            for matter in self.matters_list:
+                matter_options[matter['id']] = matter['name']
+            
+            # Switch to first available matter
+            if self.matters_list:
+                first_matter = self.matters_list[0]
+                self.current_matter = first_matter
+                self.matter_selector.options = matter_options
+                self.matter_selector.value = first_matter['id']
+                await self._on_matter_changed(type('obj', (object,), {'value': first_matter['id']})())
+            else:
+                # No matters left
+                self.current_matter = None
+                self.matter_selector.options = {}
+                self.matter_selector.value = None
+                
+                # Disable UI components
+                if self.upload_widget:
+                    self.upload_widget.props('disable')
+                if self.chat_input:
+                    self.chat_input.props('disable')
+                if self.send_button:
+                    self.send_button.props('disable')
+                if self.delete_matter_button:
+                    self.delete_matter_button.props('disable')
+            
+            # Refresh UI
+            await self._refresh_document_list()
+            await self._update_chat_display()
+            await self._refresh_memory_stats()
+            
+            self.notification_manager.success("Matter deleted successfully")
+            
+        except Exception as e:
+            logger.error("Failed to delete matter", error=str(e))
+            self.notification_manager.error(f"Failed to delete matter: {str(e)}")
     
     def _safe_notify(self, message: str, type: str = "info"):
         """Safely notify user, handling disconnected clients."""

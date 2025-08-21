@@ -225,6 +225,33 @@ class APIClient:
             logger.error("Failed to get active matter", error=str(e))
             raise
     
+    async def delete_matter(self, matter_id: str) -> Dict[str, Any]:
+        """
+        Delete a matter and all associated data.
+        
+        Args:
+            matter_id: ID of the matter to delete
+            
+        Returns:
+            Response with deletion status
+            
+        Raises:
+            Exception if deletion fails
+        """
+        session = await self._get_session()
+        try:
+            async with session.delete(f"{self.base_url}/api/matters/{matter_id}") as response:
+                response.raise_for_status()
+                return await response.json()
+        except aiohttp.ClientResponseError as e:
+            if e.status == 404:
+                raise Exception(f"Matter not found: {matter_id}")
+            else:
+                raise Exception(f"Failed to delete matter: {e.message}")
+        except Exception as e:
+            logger.error("Failed to delete matter", matter_id=matter_id, error=str(e))
+            raise
+    
     # File Upload
     async def upload_files(
         self,
