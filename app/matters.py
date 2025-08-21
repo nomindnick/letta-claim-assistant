@@ -12,6 +12,7 @@ import uuid
 import re
 import json
 import threading
+from slugify import slugify
 
 from .models import Matter, MatterPaths, MatterSummary
 from .logging_conf import get_logger, bind_matter_context
@@ -139,7 +140,7 @@ class MatterManager:
             raise ValueError(f"Matter '{name}' already exists")
         
         # Create matter directory structure
-        paths = self._create_matter_directories(matter_root)
+        paths = self._create_matter_filesystem(matter_root)
         
         # Create Matter instance with provider configuration
         matter = Matter(
@@ -154,7 +155,8 @@ class MatterManager:
         )
         
         # Save matter configuration
-        settings.save_matter_config(matter)
+        config_dict = matter.to_config_dict()
+        settings.save_matter_config(matter.paths.root, config_dict)
         
         # Initialize Letta adapter for memory - will be created with provider config
         from .letta_adapter import LettaAdapter
@@ -184,7 +186,8 @@ class MatterManager:
         Args:
             matter: Matter instance with updated values
         """
-        settings.save_matter_config(matter)
+        config_dict = matter.to_config_dict()
+        settings.save_matter_config(matter.paths.root, config_dict)
         logger.info("Matter updated", matter_id=matter.id)
     
     def list_matters(self) -> List[Matter]:

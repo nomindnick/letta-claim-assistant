@@ -50,3 +50,4 @@ black>=23.0.0
 
 # Optional: Additional utilities
 python-dotenv>=1.0.0
+python-slugify>=8.0.0
