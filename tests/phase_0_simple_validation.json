@@ -1,0 +1,15 @@
+{
+  "timestamp": "2025-08-21T10:04:00.563083",
+  "results": {
+    "OLLAMA_BASE_URL Fix": true,
+    "Letta Import": true,
+    "Server Startup": true,
+    "Provider Bridge": true,
+    "Ollama Availability": true
+  },
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0
+  }
+}

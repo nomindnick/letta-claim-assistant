@@ -1,0 +1,70 @@
+{
+  "setup_success": false,
+  "tests": {
+    "Tool Registration": {
+      "test": "tool_registration",
+      "status": "skipped",
+      "details": {},
+      "reason": "No Letta client available"
+    },
+    "Memory Blocks": {
+      "test": "memory_blocks",
+      "status": "skipped",
+      "details": {},
+      "reason": "No Letta client available"
+    },
+    "Provider Agents": {
+      "test": "provider_agents",
+      "status": "skipped",
+      "details": {
+        "ollama": {},
+        "gemini": {},
+        "openai": {}
+      },
+      "reason": "No Letta client available"
+    },
+    "Passages API": {
+      "test": "passages_api",
+      "status": "skipped",
+      "details": {},
+      "reason": "No Letta client available"
+    },
+    "Health Monitoring": {
+      "test": "health_monitoring",
+      "status": "skipped",
+      "details": {},
+      "reason": "No Letta client available"
+    },
+    "Agent Modification": {
+      "test": "agent_modification",
+      "status": "skipped",
+      "details": {},
+      "reason": "No Letta client available"
+    },
+    "Context Passing": {
+      "test": "context_passing",
+      "status": "skipped",
+      "details": {},
+      "reason": "No Letta client available"
+    }
+  },
+  "summary": {
+    "total": 7,
+    "passed": 0,
+    "failed": 0,
+    "skipped": 7,
+    "partial": 0
+  },
+  "compatibility_matrix": {
+    "letta_version": "0.10.0",
+    "tested_at": "2025-08-21T10:02:43.031876",
+    "capabilities": {},
+    "issues": [
+      {
+        "type": "setup_failure",
+        "error": "'LettaServerManager' object has no attribute 'is_running'"
+      }
+    ],
+    "workarounds": []
+  }
+}

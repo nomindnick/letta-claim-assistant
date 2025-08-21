@@ -234,6 +234,16 @@ class LettaServerManager:
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
             
+            # CRITICAL FIX: Enable Ollama provider by setting OLLAMA_BASE_URL
+            # This is required for Letta v0.10.0 to recognize Ollama as a valid provider
+            # Without this, agent-specific Ollama configurations are ignored
+            if self.mode == "docker":
+                # Docker on macOS/Windows needs special host
+                env["OLLAMA_BASE_URL"] = "http://host.docker.internal:11434"
+            else:
+                # Standard localhost for native execution
+                env["OLLAMA_BASE_URL"] = "http://localhost:11434"
+            
             # Start server process
             logger.info(f"Starting Letta server subprocess: {' '.join(cmd)}")
             self.process = subprocess.Popen(
