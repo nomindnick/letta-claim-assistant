@@ -1,11 +1,18 @@
 # Stateful Agent-First Architecture Specification
 
-**Status**: Phase 1 Complete ✅ (2025-08-21)  
-**Current Phase**: Ready for Phase 2 - UI Integration  
-**Test Results**: All Phase 1 tests passing (6/6)
+**Status**: Phase 2 Complete ✅ (2025-08-21)  
+**Current Phase**: Ready for Phase 3 - Testing and Refinement  
+**Test Results**: Phase 1 tests passing (6/6), Phase 2 verification complete (14/14)
 
 ## Vision Statement
 Transform the Letta Construction Claim Assistant from a RAG-first system with passive memory to an agent-first system where a stateful Letta agent serves as the primary interface, actively learning about cases over time and intelligently leveraging RAG search as a tool when needed.
+
+## Latest Update: Phase 2 Complete (2025-08-21)
+Phase 2 UI Integration has been successfully implemented. The application now features:
+- Single conversation interface with no mode selector
+- Agent-driven tool usage with visual indicators
+- Transparent display of when documents are searched
+- Maintained citation accuracy and conversation continuity
 
 ## Current Implementation Context
 
@@ -450,11 +457,19 @@ async def implement_archival_memory(agent_id: str):
 - Created `app/letta_agent.py` for stateful agent handling
 - All tests passing (6/6)
 
-#### Phase 2: UI Integration (Week 1-2)
-- [ ] Remove chat mode selector
-- [ ] Single conversation interface per matter
-- [ ] Show when agent uses search tool
-- [ ] Display sources with citations
+#### Phase 2: UI Integration ✅ COMPLETE (2025-08-21, 2h)
+- [x] Remove chat mode selector ✅
+- [x] Single conversation interface per matter ✅
+- [x] Show when agent uses search tool ✅
+- [x] Display sources with citations ✅
+
+**Implementation Summary:**
+- Removed `ChatModeSelector` component completely from UI
+- Integrated `LettaAgentHandler` in backend API
+- Created `ui/agent_indicators.py` with tool usage components
+- Updated message display to show tool badges and indicators
+- Maintained backward compatibility with optional fields
+- All 14 verification checks passing
 
 #### Phase 3: Testing and Refinement (Week 2)
 - [ ] Test conversation continuity

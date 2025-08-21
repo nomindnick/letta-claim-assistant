@@ -31,7 +31,10 @@ from ui.memory_components import (
     MemoryStatusBadge, MemoryStatsDashboard, AgentHealthIndicator,
     MemoryOperationToast, MemoryContextTooltip
 )
-from ui.chat_components import ChatModeSelector, ChatModeIndicator
+from ui.agent_indicators import (
+    AgentToolIndicator, SearchInProgressIndicator, ToolUsageCard,
+    MemoryOperationIndicator, AgentThinkingIndicator
+)
 from ui.performance import (
     chat_debouncer, search_debouncer, response_cache,
     lazy_loader, with_loading_state, measure_performance
@@ -52,7 +55,7 @@ class LettaClaimUI:
         self.upload_jobs: Dict[str, Dict] = {}  # Track upload jobs
         self.chat_history: List[Dict[str, Any]] = []  # Chat message history
         self.current_sources: List[Dict[str, Any]] = []  # Current sources for display
-        self.current_chat_mode: str = "combined"  # Current chat mode
+        # Removed chat mode - agent decides when to use tools
         
         # UI component references
         self.matter_selector = None
@@ -76,11 +79,7 @@ class LettaClaimUI:
         self.agent_health = AgentHealthIndicator()
         self.memory_stats_timer = None
         
-        # Chat mode selector
-        self.chat_mode_selector = ChatModeSelector(
-            default_mode="combined",
-            on_change=self._on_chat_mode_changed
-        )
+        # Agent-first architecture - no mode selector needed
         
         # UI state
         self.is_processing = False
@@ -229,18 +228,6 @@ class LettaClaimUI:
             # Could implement cancellation logic here
             pass
     
-    def _on_chat_mode_changed(self, mode: str):
-        """Handle chat mode change."""
-        self.current_chat_mode = mode
-        logger.info(f"Chat mode changed to: {mode}")
-        
-        # Update UI to reflect mode change
-        if mode == "memory":
-            self.memory_badge.show_active("Memory Mode")
-        elif mode == "rag":
-            self.memory_badge.hide()
-        else:
-            self.memory_badge.show_enhanced()
     
     async def _check_backend_connection(self):
         """Check if backend API is available."""
@@ -353,10 +340,7 @@ class LettaClaimUI:
                         on_click=self._toggle_settings_drawer
                     ).props('flat round')
             
-            # Chat mode selector
-            self.chat_mode_selector.create()
-            
-            # Chat messages area
+            # Chat messages area (agent-first - no mode selector)
             with ui.card().classes('w-full flex-1 mb-4'):
                 self.chat_messages = ui.column().classes('w-full h-full overflow-y-auto p-4')
                 # Chat messages will be populated by _update_chat_display()
@@ -925,8 +909,7 @@ class LettaClaimUI:
             "timestamp": datetime.now().isoformat(),
             "sources": [],
             "followups": [],
-            "used_memory": [],
-            "mode": self.current_chat_mode  # Track mode used for this message
+            "used_memory": []
         }
         self.chat_history.append(user_message)
         
@@ -934,48 +917,36 @@ class LettaClaimUI:
         with self.chat_messages:
             await self._add_message_to_display(user_message)
         
-        # Show mode-specific status
-        if self.current_chat_mode == "memory":
-            self.memory_badge.show_active("Memory Mode Active")
-            MemoryOperationToast.show_info("Querying agent memory only")
-        elif self.current_chat_mode == "rag":
-            self.memory_badge.hide()
-            MemoryOperationToast.show_info("Searching documents only")
-        else:
-            self.memory_badge.show_active("Recalling Memory")
-            MemoryOperationToast.show_recalling()
+        # Show agent thinking status
+        self.memory_badge.show_active("Agent Processing")
+        MemoryOperationToast.show_info("Agent analyzing query...")
         
-        # Show mode-specific thinking indicator
+        # Show enhanced thinking indicator
         with self.chat_messages:
-            thinking_card = ui.card().classes('w-full mb-2 bg-gray-50')
-            with thinking_card:
-                with ui.row().classes('items-center'):
-                    ui.spinner()
-                    # Mode-specific thinking message
-                    if self.current_chat_mode == "memory":
-                        thinking_text = "Consulting agent memory..."
-                    elif self.current_chat_mode == "rag":
-                        thinking_text = "Searching documents..."
-                    else:
-                        thinking_text = "Searching documents and memory..."
-                    ui.label(thinking_text).classes('ml-2')
+            thinking_card = AgentThinkingIndicator.create("Agent analyzing your query...")
         
         try:
-            # Send to backend with current chat mode
+            # Send to backend - agent decides when to use tools
             response = await self.api_client.send_chat_message(
                 self.current_matter['id'],
-                query,
-                mode=self.current_chat_mode  # Pass the selected mode
+                query
             )
             
             # Remove thinking indicator
             thinking_card.delete()
+            
+            # Show what the agent did
+            if response.get('search_performed'):
+                MemoryOperationToast.show_success("Agent searched documents")
             
             # Check if memory was used
             used_memory = response.get('used_memory', [])
             if used_memory:
                 self.memory_badge.show_enhanced()
                 MemoryOperationToast.show_success("Memory enhanced response")
+            elif not response.get('search_performed'):
+                # Agent answered from memory/context only
+                self.memory_badge.show_active("From Context")
             else:
                 self.memory_badge.hide()
             
@@ -987,7 +958,8 @@ class LettaClaimUI:
                 "sources": response.get('sources', []),
                 "followups": response.get('followups', []),
                 "used_memory": used_memory,
-                "mode": self.current_chat_mode  # Track mode used for this response
+                "tools_used": response.get('tools_used', []),  # Track tools used
+                "search_performed": response.get('search_performed', False)  # Track if search was done
             }
             self.chat_history.append(assistant_message)
             
@@ -1174,7 +1146,8 @@ class LettaClaimUI:
         timestamp = message.get("timestamp", "")
         sources = message.get("sources", [])
         followups = message.get("followups", [])
-        mode = message.get("mode", "combined")  # Get mode used for this message
+        tools_used = message.get("tools_used", [])
+        search_performed = message.get("search_performed", False)
         
         # Format timestamp
         from datetime import datetime
@@ -1193,10 +1166,10 @@ class LettaClaimUI:
                         ui.label(time_str).classes('text-xs text-gray-500')
         
         elif role == "assistant":
-            # Assistant message with smooth animation and memory indicator
+            # Assistant message with smooth animation and tool indicators
             card_classes = 'w-full mb-2 bg-green-50 animate-slide-up hover-lift transition-all'
             
-            # Add memory glow if memory was used
+            # Add memory glow if memory was used or tools were used
             used_memory = message.get('used_memory', [])
             if used_memory:
                 card_classes += ' memory-active'
@@ -1207,11 +1180,18 @@ class LettaClaimUI:
                         with ui.column().classes('flex-1'):
                             with ui.row().classes('items-center gap-2 mb-2'):
                                 ui.markdown("**Assistant:**")
-                                # Add mode indicator
-                                ChatModeIndicator.create(mode)
+                                # Add tool indicators if tools were used
+                                if search_performed:
+                                    AgentToolIndicator.create_tool_badge("search_documents")
+                                if used_memory:
+                                    MemoryOperationIndicator.create_memory_used_badge()
                             ui.markdown(content)
                         if time_str:
                             ui.label(time_str).classes('text-xs text-gray-500')
+                    
+                    # Show which tools were used
+                    if tools_used:
+                        AgentToolIndicator.create_tools_row(tools_used)
                     
                     # Add follow-up suggestions if available
                     if followups:

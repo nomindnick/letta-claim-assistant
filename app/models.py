@@ -242,6 +242,10 @@ class ChatResponse(BaseModel):
     followups: List[str] = Field(default_factory=list, description="Suggested follow-up questions")
     used_memory: List[KnowledgeItem] = Field(default_factory=list, description="Agent memory items used")
     
+    # Agent tool usage tracking
+    tools_used: Optional[List[str]] = Field(default_factory=list, description="Tools used by agent")
+    search_performed: bool = Field(default=False, description="Whether document search was performed")
+    
     # Advanced features (optional for backward compatibility)
     citation_metrics: Optional[CitationMetrics] = Field(None, description="Citation quality metrics")
     quality_metrics: Optional[QualityMetrics] = Field(None, description="Response quality metrics")

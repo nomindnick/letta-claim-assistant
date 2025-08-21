@@ -29,6 +29,7 @@ from .matters import matter_manager
 from .jobs import job_queue, ensure_job_queue_started
 from .rag import RAGEngine
 from .llm.provider_manager import provider_manager
+from .letta_agent import LettaAgentHandler, AgentResponse
 from .quality_metrics import QualityThresholds as QualityThresholdsClass
 from .hybrid_retrieval import RetrievalWeights as RetrievalWeightsClass
 from .privacy_consent import consent_manager, ConsentType
@@ -44,6 +45,9 @@ from .startup_checks import validate_startup, format_check_results
 from .production_config import validate_production_config, get_environment_mode, is_production_environment
 
 logger = get_logger(__name__)
+
+# Initialize the Letta agent handler
+agent_handler = LettaAgentHandler()
 
 # Create FastAPI app
 app = FastAPI(title="Letta Claim Assistant API", version="0.1.0")
@@ -894,10 +898,10 @@ async def submit_matter_analysis_job(
 # Chat / RAG Endpoints
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Process chat query using RAG pipeline."""
+    """Process chat query using stateful Letta agent."""
     try:
         logger.info(
-            "Processing chat request",
+            "Processing chat request via agent",
             matter_id=request.matter_id,
             query_preview=request.query[:100],
             k=request.k,
@@ -912,31 +916,37 @@ async def chat(request: ChatRequest):
                 detail=f"Matter with ID {request.matter_id} not found"
             )
         
-        # 2. Get active LLM provider
-        active_provider = provider_manager.get_active_provider()
-        if not active_provider:
-            # Provide a more helpful error message
-            raise HTTPException(
-                status_code=503,
-                detail="No LLM provider configured. Please go to Settings and configure either Ollama (local) or Gemini (external) as your LLM provider. Memory-only mode also requires an LLM to generate responses."
-            )
-        
-        # 3. Initialize RAG engine for the matter
-        rag_engine = RAGEngine(
-            matter=matter,
-            llm_provider=active_provider,
-            enable_advanced_features=True
+        # 2. Send message to the agent (agent decides when to use tools)
+        agent_response = await agent_handler.send_message(
+            matter_id=request.matter_id,
+            message=request.query,
+            k=request.k,  # Pass k for tool context
+            max_tokens=request.max_tokens
         )
         
-        # 4. Process query through RAG pipeline
-        rag_response = await rag_engine.generate_answer_with_quality_retry(
-            query=request.query,
-            k=request.k,
-            k_memory=6,  # Default memory items to recall
-            mode=request.mode,  # Pass the chat mode from request
-            max_tokens=request.max_tokens,
-            temperature=0.2,  # Conservative temperature for legal analysis
-            max_retry_attempts=1  # Allow one retry for quality improvement
+        # 3. Convert agent response to ChatResponse format
+        # Extract sources from search results if search was performed
+        sources = []
+        if agent_response.search_performed and agent_response.search_results:
+            for result in agent_response.search_results:
+                sources.append({
+                    "doc": result.get("doc_name", ""),
+                    "page_start": result.get("page_start", 1),
+                    "page_end": result.get("page_end", 1),
+                    "text": result.get("snippet", ""),
+                    "score": result.get("score", 0.0)
+                })
+        
+        # 4. Create the response with tool usage information
+        rag_response = ChatResponse(
+            answer=agent_response.message,
+            sources=sources,
+            followups=[],  # Agent doesn't generate followups yet
+            used_memory=[],  # Memory items handled internally by agent
+            tools_used=agent_response.tools_used,  # Include tools used
+            search_performed=agent_response.search_performed,  # Include search status
+            processing_time=agent_response.response_time,
+            confidence_score=0.9 if agent_response.search_performed else 0.8
         )
         
         # 5. Save interaction to chat history
@@ -946,42 +956,31 @@ async def chat(request: ChatRequest):
             await chat_manager.save_interaction(
                 user_query=request.query,
                 assistant_response=rag_response.answer,
-                sources=[source.model_dump() for source in rag_response.sources],
-                followups=rag_response.followups,
-                used_memory=[item.model_dump() for item in rag_response.used_memory],
+                sources=sources,
+                followups=[],
+                used_memory=[],
                 query_metadata={
                     "k": request.k,
                     "max_tokens": request.max_tokens,
-                    "model": request.model
+                    "model": request.model,
+                    "tools_used": agent_response.tools_used,
+                    "search_performed": agent_response.search_performed
                 }
             )
         except Exception as e:
             logger.warning("Failed to save chat history", error=str(e))
             # Don't fail the request if history saving fails
         
-        # 6. Convert RAG response to enhanced API response format with quality metrics
-        api_response = ChatResponse(
-            answer=rag_response.answer,
-            sources=rag_response.sources,
-            followups=rag_response.followups,
-            used_memory=rag_response.used_memory,
-            citation_metrics=rag_response.citation_metrics.model_dump() if rag_response.citation_metrics else None,
-            quality_metrics=rag_response.quality_metrics.model_dump() if rag_response.quality_metrics else None,
-            processing_time=rag_response.processing_time,
-            confidence_score=rag_response.confidence_score,
-            quality_warnings=rag_response.quality_warnings or [],
-            improvement_suggestions=rag_response.improvement_suggestions or []
-        )
-        
         logger.info(
-            "Chat request completed successfully",
+            "Chat request completed via agent",
             matter_id=request.matter_id,
-            answer_length=len(rag_response.answer),
-            sources_count=len(rag_response.sources),
-            followups_count=len(rag_response.followups)
+            answer_length=len(agent_response.message),
+            sources_count=len(sources),
+            tools_used=agent_response.tools_used,
+            search_performed=agent_response.search_performed
         )
         
-        return api_response
+        return rag_response
         
     except HTTPException:
         # Re-raise HTTP exceptions (404, 503, etc.)

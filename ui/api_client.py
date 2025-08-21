@@ -397,22 +397,20 @@ class APIClient:
         matter_id: str,
         query: str,
         k: int = 8,
-        mode: str = "combined",  # Add mode parameter with default
         model: Optional[str] = None,
         max_tokens: Optional[int] = None
     ) -> Dict[str, Any]:
-        """Send chat message and get RAG response.
+        """Send chat message to the agent.
         
         Args:
             matter_id: ID of the matter to query
             query: User's question
-            k: Number of document chunks to retrieve
-            mode: Chat mode - "rag" (documents only), "memory" (agent only), or "combined" (both)
+            k: Number of document chunks to retrieve (hint for agent)
             model: Optional model override
             max_tokens: Optional max tokens override
             
         Returns:
-            Response with answer, sources, and metadata
+            Response with answer, sources, tools used, and metadata
         """
         session = await self._get_session()
         try:
@@ -420,8 +418,7 @@ class APIClient:
             payload = {
                 "matter_id": matter_id,
                 "query": query,
-                "k": k,
-                "mode": mode  # Include mode in payload
+                "k": k
             }
             if model is not None:
                 payload["model"] = model

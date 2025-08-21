@@ -2,7 +2,13 @@
 
 **Project Start Date:** 2025-08-14  
 **Last Updated:** 2025-08-21  
-**Current Status:** 🚀 Phase 1 Complete - Stateful Agent with RAG Tool Implemented
+**Current Status:** 🚀 Phase 2 Complete - Agent-First UI Integration Implemented
+
+## 🎯 Major Milestone: Agent-First Architecture Transformation
+The application has been successfully transformed from a RAG-first system to an agent-first architecture:
+- **Before**: User → RAG Pipeline → Documents/Memory → Response
+- **After**: User → Stateful Agent → Intelligent Tool Selection → Response
+- **Result**: The Letta agent now maintains conversation context, learns about matters over time, and intelligently decides when to search documents versus using its memory.
 
 ---
 
@@ -42,10 +48,83 @@
 | **M6** | **Completed** | 2025-08-20 | 2h | **Chat Mode UI** |
 | **Phase 0** | **Completed** | 2025-08-21 | 1h | **Technical Discovery & Validation** |
 | **Phase 1** | **Completed** | 2025-08-21 | 2h | **Core Agent with RAG Tool** |
+| **Phase 2** | **Completed** | 2025-08-21 | 2h | **UI Integration** |
 
 ---
 
 ## Stateful Agent-First Architecture Implementation
+
+### Phase 2: UI Integration ✅ COMPLETE (2025-08-21, 2h)
+
+**Implementation Summary:**
+- Removed `ChatModeSelector` component and all mode-related logic from UI
+- Integrated `LettaAgentHandler` in backend API `/api/chat` endpoint
+- Created `ui/agent_indicators.py` with tool usage visualization components
+- Updated message display to show tool badges and search indicators
+- Modified `ChatResponse` model to include `tools_used` and `search_performed` fields
+- Maintained backward compatibility with optional fields
+
+**Key UI Changes:**
+1. **Chat Mode Removal**: 
+   - Deleted ChatModeSelector import and component
+   - Removed _on_chat_mode_changed handler
+   - Eliminated current_chat_mode tracking
+   - Cleaned up mode-specific UI logic
+
+2. **Agent Integration**:
+   - Backend now routes all messages through LettaAgentHandler
+   - Agent decides when to use search_documents tool
+   - Response includes tool usage metadata
+
+3. **Tool Indicators Created**:
+   - `AgentToolIndicator` - Shows tool usage badges
+   - `SearchInProgressIndicator` - Animated search display
+   - `ToolUsageCard` - Detailed tool usage information
+   - `AgentThinkingIndicator` - Enhanced thinking animation
+   - `MemoryOperationIndicator` - Memory operation status
+
+4. **Message Display Updates**:
+   - Tool badges shown inline with assistant responses
+   - "Memory Enhanced" badge when memory contributes
+   - Search performed indicator when documents searched
+   - Maintained precise citation formatting
+
+**Verification Results (14/14 Passed):**
+- ✅ ChatModeSelector removed from imports
+- ✅ Mode selector not created in UI
+- ✅ Mode change handler removed
+- ✅ LettaAgentHandler imported in API
+- ✅ Agent handler initialized
+- ✅ Using agent for message handling
+- ✅ agent_indicators.py created
+- ✅ AgentToolIndicator class defined
+- ✅ SearchInProgressIndicator defined
+- ✅ Tool indicators imported in UI
+- ✅ Tool badges displayed in messages
+- ✅ Tracking tools used in messages
+- ✅ ChatResponse includes tool fields
+- ✅ Mode parameter removed from API client
+
+**Files Created/Modified:**
+- NEW: `ui/agent_indicators.py` - Tool usage visualization components
+- NEW: `tests/test_phase_2_ui_integration.py` - Phase 2 test suite
+- NEW: `verify_phase_2.py` - Phase 2 verification script
+- MODIFIED: `app/api.py` - Integrated LettaAgentHandler for chat endpoint
+- MODIFIED: `app/models.py` - Added tools_used and search_performed to ChatResponse
+- MODIFIED: `ui/main.py` - Removed mode selector, added tool indicators
+- MODIFIED: `ui/api_client.py` - Removed mode parameter from send_chat_message
+
+**User Experience Improvements:**
+- Single unified conversation interface per matter
+- No mode selection required - agent intelligently decides
+- Clear visual feedback when tools are used
+- Transparent operation - users see what the agent does
+- Maintained conversation continuity through agent memory
+
+**Next Steps:**
+- Phase 3: Testing and Refinement
+- Performance optimization for agent operations
+- Additional tool development (future phases)
 
 ### Phase 1: Core Agent with RAG Tool ✅ COMPLETE (2025-08-21, 2h)
 
